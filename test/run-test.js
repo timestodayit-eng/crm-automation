@@ -212,7 +212,9 @@ async function main() {
   await req('/login', { user: 'admin', password: 'testpass' });
   const home = await (await req('/')).text();
   ok(home.includes('Test Site'), 'লগইনের পর ড্যাশবোর্ডে সাইট দেখা যাচ্ছে');
-  for (const p of ['', '/agents', '/callers', '/sms', '/sms?status=sent', '/events', '/settings']) {
+  const callsHtml = await (await req(`/sites/${siteId}/calls`)).text();
+  ok(callsHtml.includes('01810000001') && callsHtml.includes('মিসড কল'), 'মিসড কল ট্যাবে আজকের মিসড কলের নাম্বার দেখা যাচ্ছে');
+  for (const p of ['', '/calls?view=all', '/calls?view=answered&q=0181', '/agents', '/callers', '/sms', '/sms?status=sent', '/events', '/settings']) {
     const r = await req(`/sites/${siteId}${p}`);
     ok(r.status === 200, `পেজ খুলছে: /sites/${siteId}${p}`);
   }

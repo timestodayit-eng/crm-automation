@@ -221,6 +221,52 @@ ${actions ? `<td>${r.status === 'failed' ? `<form method="post" action="/sites/$
     back(req, res);
   });
 
+  // ---------- মিসড কল ----------
+  app.get('/sites/:id/calls', loadSite, (req, res) => {
+    const s = req.site;
+    const view = ['missed', 'answered', 'all'].includes(req.query.view) ? req.query.view : 'missed';
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : time.now().slice(0, 10);
+    const q = String(req.query.q || '').replace(/[^\d]/g, '');
+    const cond = view === 'missed' ? "AND UPPER(k.status) = 'MISSED CALL'" : view === 'answered' ? "AND UPPER(k.status) = 'ANSWERED'" : '';
+    const rows = db
+      .prepare(
+        `SELECT k.*, a.name agent_name, a.number agent_number,
+           (SELECT l.status FROM sms_log l WHERE l.site_id = k.site_id AND l.caller = k.caller ORDER BY l.id DESC LIMIT 1) sms_status
+         FROM calls k
+         LEFT JOIN callers c ON c.site_id = k.site_id AND c.number = k.caller
+         LEFT JOIN agents a ON a.id = c.agent_id
+         WHERE k.site_id = ? AND k.call_date >= ? AND k.call_date <= ? AND k.caller LIKE ? ${cond}
+         ORDER BY k.call_date DESC LIMIT 500`
+      )
+      .all(s.id, `${date} 00:00:00`, `${date} 23:59:59`, `%${q}%`);
+    const unique = new Set(rows.map((r) => r.caller)).size;
+    const tab = (k, l) => `<a class="btn small ${view === k ? '' : 'ghost'}" href="/sites/${s.id}/calls?view=${k}&date=${date}${q ? `&q=${q}` : ''}">${l}</a>`;
+    render(
+      req,
+      res,
+      'মিসড কল',
+      `${siteTabs(s, '/calls')}
+<div class="card"><form class="row" method="get"><input type="hidden" name="view" value="${view}">
+<input type="date" name="date" value="${date}" style="max-width:180px;font:inherit;border:1px solid #cdd2cc;border-radius:7px;padding:6px 10px">
+<input type="search" name="q" value="${esc(q)}" placeholder="নাম্বার দিয়ে খুঁজুন" style="max-width:220px"><button class="btn ghost">দেখুন</button></form>
+<div class="row" style="margin-top:12px">${tab('missed', 'মিসড কল')}${tab('answered', 'রিসিভ হওয়া')}${tab('all', 'সব কল')}</div></div>
+<div class="card"><h2>${esc(date)} — ${rows.length}টি কল, ${unique} জন আলাদা কলার</h2>
+<p class="help">mConnex থেকে বট যতবার কল টেনেছে, সব এখানে জমা হয়। সিস্টেম চালুর আগের পুরনো কলও দেখাবে, তবে সেগুলোতে SMS যায় না।</p>
+<div class="scroll"><table><tr><th>সময়</th><th>কলার</th><th>কোন নাম্বারে</th><th>অবস্থা</th><th>সময় (সেকেন্ড)</th><th>এজেন্ট</th><th>SMS</th></tr>
+${
+  rows
+    .map(
+      (r) => `<tr><td class="nowrap">${esc(r.call_date.slice(11))}</td><td class="nowrap">${esc(r.caller)}</td><td class="nowrap">${esc(r.called)}</td>
+<td>${/missed/i.test(r.status) ? '<span class="pill amber">মিসড কল</span>' : /answer/i.test(r.status) ? '<span class="pill green">রিসিভ</span>' : esc(r.status)}</td>
+<td>${r.total_duration ?? '—'}${r.answered_duration ? ` / কথা ${r.answered_duration}` : ''}</td>
+<td>${r.agent_name ? `${esc(r.agent_name)}<br><span class="muted">${esc(r.agent_number)}</span>` : '—'}</td>
+<td>${r.sms_status ? statusPill(r.sms_status) : '—'}</td></tr>`
+    )
+    .join('') || '<tr><td colspan="7" class="muted">এই দিনে কোনো কল নেই। সারাংশ ট্যাব থেকে "এখনই কল চেক করুন" চাপুন।</td></tr>'
+}</table></div><p class="help">সর্বোচ্চ ৫০০টি দেখানো হচ্ছে।</p></div>`
+    );
+  });
+
   // ---------- এজেন্ট ----------
   app.get('/sites/:id/agents', loadSite, (req, res) => {
     const s = req.site;

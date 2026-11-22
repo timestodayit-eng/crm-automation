@@ -90,6 +90,7 @@ ${user ? `<form method="post" action="/logout"><button>লগআউট</button><
 function siteTabs(site, active) {
   const t = [
     ['', 'সারাংশ'],
+    ['/calls', 'মিসড কল'],
     ['/agents', 'এজেন্ট'],
     ['/callers', 'কলার'],
     ['/sms', 'SMS লগ'],
