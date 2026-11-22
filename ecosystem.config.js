@@ -4,6 +4,7 @@ module.exports = {
     {
       name: 'missed-call-sms',
       script: 'src/server.js',
+      exec_mode: 'fork',
       instances: 1, // একটার বেশি দেবেন না — তাহলে একই SMS দুবার যেতে পারে
       autorestart: true,
       max_memory_restart: '300M',
