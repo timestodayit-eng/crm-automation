@@ -8,14 +8,28 @@ function baseUrl() {
 const HEADERS = {
   Accept: 'application/json;charset=UTF-8',
   'Content-Type': 'application/json;charset=UTF-8',
+  Origin: 'https://mconnex.ebsbd.com',
   Referer: 'https://mconnex.ebsbd.com/',
 };
 
 class AuthError extends Error {}
 
-async function request(url, options = {}) {
-  const res = await fetch(url, { ...options, signal: AbortSignal.timeout(30000) });
-  const text = await res.text();
+function timeoutMs() {
+  return Math.max(5000, Number(process.env.MCONNEX_TIMEOUT_MS) || 60000);
+}
+
+async function request(url, options = {}, step = 'mConnex') {
+  let res;
+  let text;
+  try {
+    res = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs()) });
+    text = await res.text();
+  } catch (e) {
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') {
+      throw new Error(`${step}: ${Math.round(timeoutMs() / 1000)} সেকেন্ডেও mConnex উত্তর দেয়নি`);
+    }
+    throw new Error(`${step}: mConnex-এ পৌঁছানো যায়নি (${e.cause?.code || e.message})`);
+  }
   let body;
   try {
     body = JSON.parse(text);
@@ -36,7 +50,7 @@ async function login(site) {
     method: 'POST',
     headers: HEADERS,
     body: JSON.stringify({ loginName: site.mconnex_login, password: site.mconnex_password }),
-  }).catch((e) => {
+  }, 'লগইন').catch((e) => {
     if (e instanceof AuthError) throw new Error('mConnex লগইন ব্যর্থ — নাম বা পাসওয়ার্ড ভুল');
     throw e;
   });
@@ -67,7 +81,7 @@ async function fetchPage(site, params) {
   const doFetch = () =>
     request(reportUrl(params), {
       headers: { ...HEADERS, Authorization: `Bearer ${site.mconnex_token}` },
-    });
+    }, `কল রিপোর্ট (পেজ ${params.page})`);
   let body;
   try {
     body = await doFetch();

@@ -1,4 +1,6 @@
 require('dotenv').config();
+// কিছু VPS-এ IPv6 ঠিকমতো কাজ করে না, তখন সংযোগ ঝুলে থাকে — আগে IPv4 চেষ্টা করা
+require('dns').setDefaultResultOrder('ipv4first');
 const crypto = require('crypto');
 const express = require('express');
 const session = require('express-session');
