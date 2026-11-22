@@ -1,0 +1,21 @@
+{
+  "name": "missed-call-sms",
+  "version": "1.0.0",
+  "description": "mConnex missed-call auto SMS with sticky round-robin agent assignment (multi-site)",
+  "main": "src/server.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node test/run-test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "better-sqlite3": "^13.2.0",
+    "dotenv": "^18.0.10",
+    "express": "^4.22.3",
+    "express-session": "^1.19.0"
+  }
+}
