@@ -98,6 +98,12 @@ function createApp() {
       callers: one('SELECT COUNT(*) c FROM callers WHERE site_id = ?'),
     };
   }
+  function pollingNote(siteId) {
+    const p = engine.pollStatus(siteId);
+    if (!p.running) return '';
+    const min = Math.floor((Date.now() - p.since) / 60000);
+    return `<div class="warn">এখন mConnex থেকে কল টানা চলছে (${min ? `${min} মিনিট ধরে` : 'এইমাত্র শুরু'})। শেষ হলে নিচের অবস্থা বদলাবে — পেজটা রিফ্রেশ করুন।</div>`;
+  }
   function loadSite(req, res, next) {
     const site = db.prepare('SELECT * FROM sites WHERE id = ?').get(Number(req.params.id));
     if (!site) return res.redirect('/');
@@ -119,6 +125,7 @@ ${s.enabled ? '<span class="pill green">চালু</span>' : '<span class="pil
 <div><b>${st.missedToday}</b><br><small class="muted">আজ মিসড কল</small></div>
 <div><b>${s.dry_run ? st.dryToday : st.sentToday}</b><br><small class="muted">${s.dry_run ? 'আজ টেস্ট SMS' : 'আজ SMS গেছে'}</small></div>
 <div><b>${st.activeAgents}/${st.totalAgents}</b><br><small class="muted">সক্রিয় এজেন্ট</small></div></div>
+${engine.pollStatus(s.id).running ? '<div class="help" style="color:var(--amber)">এখন কল টানা চলছে…</div>' : ''}
 <div class="help ${err ? '' : 'muted'}" style="${err ? 'color:var(--red)' : ''}">শেষ চেক: ${esc(s.last_poll_at || 'এখনো হয়নি')}${s.last_poll_status ? ' — ' + esc(s.last_poll_status) : ''}</div></div>`;
       })
       .join('');
@@ -156,7 +163,7 @@ ${s.dry_run && s.enabled ? '<div class="warn">টেস্ট মোড চা�
 <div class="stat"><b>${st.queued}</b><small>লাইনে আছে</small></div>
 <div class="stat"><b>${st.failedToday}</b><small>আজ ব্যর্থ</small></div>
 <div class="stat"><b>${st.callers}</b><small>মোট কলার</small></div></div>
-<div class="card"><h2>অবস্থা</h2><p>শেষ চেক: <b>${esc(s.last_poll_at || 'এখনো হয়নি')}</b><br><span class="muted">${esc(s.last_poll_status || '')}</span></p>
+<div class="card"><h2>অবস্থা</h2>${pollingNote(s.id)}<p>শেষ চেক: <b>${esc(s.last_poll_at || 'এখনো হয়নি')}</b><br><span class="muted">${esc(s.last_poll_status || '')}</span></p>
 <div class="row"><form method="post" action="/sites/${s.id}/poll"><button class="btn">এখনই কল চেক করুন</button></form>
 <form method="post" action="/sites/${s.id}/test-login"><button class="btn ghost">mConnex লগইন টেস্ট</button></form></div></div>
 <div class="card"><h2>টেস্ট SMS পাঠান</h2><p class="help">এটা টেস্ট মোড চালু থাকলেও আসল SMS পাঠায় — নিজের নাম্বার দিয়ে দেখুন লেখাটা কেমন যায়।</p>
@@ -180,13 +187,13 @@ ${actions ? `<td>${r.status === 'failed' ? `<form method="post" action="/sites/$
   .join('')}</table></div>`;
   }
 
-  app.post('/sites/:id/poll', loadSite, async (req, res) => {
-    const r = await engine.runSite(req.site.id, { force: true });
-    if (r.busy) flash(req, 'err', 'এই মুহূর্তে চেক চলছে, একটু পরে আবার চাপুন');
+  app.post('/sites/:id/poll', loadSite, (req, res) => {
+    const r = engine.startPoll(req.site.id);
+    if (r.busy) flash(req, 'ok', 'কল টানা আগে থেকেই চলছে — শেষ হলে এখানে ফলাফল দেখাবে');
     else {
-      const s = db.prepare('SELECT last_poll_status FROM sites WHERE id = ?').get(req.site.id);
-      const bad = String(s.last_poll_status).startsWith('ত্রুটি');
-      flash(req, bad ? 'err' : 'ok', `${s.last_poll_status}${r.queue && r.queue.quiet ? ' (এখন SMS বন্ধ থাকার সময়)' : ''}`);
+      // শেষ হলে লাইনের SMS-ও পাঠিয়ে দেয়
+      r.promise.then(() => engine.sendQueue(req.site.id)).catch(() => {});
+      flash(req, 'ok', 'কল টানা শুরু হয়েছে। mConnex ধীর, তাই কয়েক মিনিট লাগতে পারে — একটু পরে পেজটা রিফ্রেশ করুন।');
     }
     back(req, res);
   });
@@ -466,7 +473,7 @@ ${rows.map((e) => `<tr><td class="nowrap">${esc(e.created_at)}</td><td>${e.level
     const groups = [
       ['সাধারণ', ['name', 'enabled', 'dry_run']],
       ['mConnex', ['mconnex_login', 'mconnex_password', 'hotlines']],
-      ['কল চেক', ['poll_minutes', 'lookback_minutes', 'page_limit']],
+      ['কল চেক', ['poll_minutes', 'lookback_minutes', 'page_limit', 'request_timeout_minutes']],
       ['SMS-এর নিয়ম', ['sms_delay_minutes', 'skip_if_answered', 'cooldown_days', 'quiet_start', 'quiet_end', 'mobile_only', 'max_sms_per_run']],
       ['SMS-এর লেখা ও BulkSMSBD', ['sms_template', 'sms_api_key', 'sms_sender_id']],
     ];

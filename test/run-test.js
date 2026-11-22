@@ -38,6 +38,10 @@ async function main() {
         res.statusCode = 401;
         return res.end(JSON.stringify({ success: false, message: 'Invalid credentials' }));
       }
+      if (url.pathname === '/api/v1/company/user-report' && mock.delay && !req.delayed) {
+        req.delayed = true;
+        return setTimeout(() => req.emit('end'), mock.delay); // ধীর mConnex-এর নকল
+      }
       if (url.pathname === '/api/v1/company/user-report') {
         mock.reportCalls++;
         if (req.headers.authorization !== `Bearer ${mock.validToken}`) {
@@ -188,7 +192,28 @@ async function main() {
   ok(db.prepare("SELECT status FROM sms_log WHERE caller = '01810000013'").get().status === 'dry_run', 'টেস্ট মোডে লগে মেসেজ দেখাচ্ছে');
   db.prepare('UPDATE sites SET dry_run = 0').run();
 
-  console.log('\n৮. প্যানেল');
+  console.log('\n৮. ধীর mConnex — কল টানার সময়েও SMS আটকে থাকে না');
+  mock.delay = 1500;
+  mock.rows.push(call('01810000020'));
+  let p = engine.startPoll(siteId);
+  ok(p.started && engine.pollStatus(siteId).running, 'কল টানা ব্যাকগ্রাউন্ডে শুরু হয়েছে');
+  ok(engine.startPoll(siteId).busy, 'একই সময়ে দ্বিতীয়বার কল টানা শুরু হয় না');
+  db.prepare("INSERT INTO sms_log (site_id, caller, status, missed_at, due_at, created_at) VALUES (?, '01810000021', 'queued', ?, ?, ?)").run(siteId, time.minutesAgo(2), time.minutesAgo(1), time.now());
+  n = smsSent.length;
+  await engine.sendQueue(siteId);
+  ok(smsSent.length === n + 1 && engine.pollStatus(siteId).running, 'mConnex-এর উত্তরের অপেক্ষার মধ্যেই লাইনের SMS চলে গেছে');
+  await p.promise;
+  await engine.sendQueue(siteId);
+  ok(!engine.pollStatus(siteId).running && !!lastSms('01810000020'), 'ধীর উত্তর এলে নতুন মিসড কল ধরা পড়েছে আর SMS গেছে');
+  process.env.MCONNEX_TIMEOUT_MS = '500';
+  await engine.startPoll(siteId).promise;
+  const stTimeout = db.prepare('SELECT last_poll_status FROM sites WHERE id = ?').get(siteId).last_poll_status;
+  ok(/ত্রুটি: কল রিপোর্ট .*উত্তর দেয়নি/.test(stTimeout), 'সময়সীমা পেরোলে স্পষ্ট ত্রুটি দেখায়');
+  delete process.env.MCONNEX_TIMEOUT_MS;
+  mock.delay = 0;
+  await new Promise((r) => setTimeout(r, 1200)); // কেটে দেওয়া অনুরোধটা নকল সার্ভারে শেষ হতে দেওয়া
+
+  console.log('\n৯. প্যানেল');
   const { createApp } = require('../src/server');
   const app = createApp();
   const srv = await new Promise((r) => {
@@ -212,6 +237,13 @@ async function main() {
   await req('/login', { user: 'admin', password: 'testpass' });
   const home = await (await req('/')).text();
   ok(home.includes('Test Site'), 'লগইনের পর ড্যাশবোর্ডে সাইট দেখা যাচ্ছে');
+  mock.delay = 1500;
+  const t0 = Date.now();
+  const pollRes = await req(`/sites/${siteId}/poll`, { x: '1' });
+  ok(pollRes.status === 302 && Date.now() - t0 < 1000, '"এখনই কল চেক করুন" mConnex-এর অপেক্ষা না করে সাথে সাথে ফেরে');
+  ok((await (await req(`/sites/${siteId}`)).text()).includes('কল টানা চলছে'), 'সারাংশে "কল টানা চলছে" দেখাচ্ছে');
+  while (engine.pollStatus(siteId).running) await new Promise((r) => setTimeout(r, 100));
+  mock.delay = 0;
   const callsHtml = await (await req(`/sites/${siteId}/calls`)).text();
   ok(callsHtml.includes('01810000001') && callsHtml.includes('মিসড কল'), 'মিসড কল ট্যাবে আজকের মিসড কলের নাম্বার দেখা যাচ্ছে');
   for (const p of ['', '/calls?view=all', '/calls?view=answered&q=0181', '/agents', '/callers', '/sms', '/sms?status=sent', '/events', '/settings']) {

@@ -1,4 +1,5 @@
 // mConnex প্যানেলের ভেতরের API — ব্রাউজার যে রিকোয়েস্টগুলো পাঠায়, ঠিক সেগুলোই।
+const { Agent, fetch } = require('undici');
 const dbm = require('./db');
 
 function baseUrl() {
@@ -14,19 +15,30 @@ const HEADERS = {
 
 class AuthError extends Error {}
 
-function timeoutMs() {
-  return Math.max(5000, Number(process.env.MCONNEX_TIMEOUT_MS) || 60000);
+// mConnex অনেক ধীর (কয়েক মিনিটও লাগে)। Node-এর নিজস্ব fetch ৫ মিনিটে নিজে থেকে কেটে দেয়,
+// তাই undici-র Agent দিয়ে সেই সীমা তুলে দিয়ে শুধু নিজেদের সময়সীমা রাখা হয়েছে।
+const agent = new Agent({ headersTimeout: 0, bodyTimeout: 0, connect: { timeout: 30000 }, keepAliveTimeout: 10000 });
+
+// সাইটের সেটিংস থেকে সময়সীমা (মিনিট); টেস্টের জন্য MCONNEX_TIMEOUT_MS দিয়ে বদলানো যায়
+function timeoutMs(site) {
+  if (process.env.MCONNEX_TIMEOUT_MS) return Math.max(1000, Number(process.env.MCONNEX_TIMEOUT_MS));
+  return Math.max(1, Number(site && site.request_timeout_minutes) || 10) * 60 * 1000;
 }
 
-async function request(url, options = {}, step = 'mConnex') {
+function describe(ms) {
+  return ms >= 60000 ? `${Math.round(ms / 60000)} মিনিটেও` : `${Math.round(ms / 1000)} সেকেন্ডেও`;
+}
+
+async function request(url, options = {}, step = 'mConnex', site = null) {
+  const limit = timeoutMs(site);
   let res;
   let text;
   try {
-    res = await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs()) });
+    res = await fetch(url, { ...options, dispatcher: agent, signal: AbortSignal.timeout(limit) });
     text = await res.text();
   } catch (e) {
     if (e.name === 'TimeoutError' || e.name === 'AbortError') {
-      throw new Error(`${step}: ${Math.round(timeoutMs() / 1000)} সেকেন্ডেও mConnex উত্তর দেয়নি`);
+      throw new Error(`${step}: ${describe(limit)} mConnex উত্তর দেয়নি — সেটিংসে "mConnex-এর উত্তরের জন্য সর্বোচ্চ অপেক্ষা" বাড়িয়ে দেখুন`);
     }
     throw new Error(`${step}: mConnex-এ পৌঁছানো যায়নি (${e.cause?.code || e.message})`);
   }
@@ -50,7 +62,7 @@ async function login(site) {
     method: 'POST',
     headers: HEADERS,
     body: JSON.stringify({ loginName: site.mconnex_login, password: site.mconnex_password }),
-  }, 'লগইন').catch((e) => {
+  }, 'লগইন', site).catch((e) => {
     if (e instanceof AuthError) throw new Error('mConnex লগইন ব্যর্থ — নাম বা পাসওয়ার্ড ভুল');
     throw e;
   });
@@ -81,7 +93,7 @@ async function fetchPage(site, params) {
   const doFetch = () =>
     request(reportUrl(params), {
       headers: { ...HEADERS, Authorization: `Bearer ${site.mconnex_token}` },
-    }, `কল রিপোর্ট (পেজ ${params.page})`);
+    }, `কল রিপোর্ট (পেজ ${params.page})`, site);
   let body;
   try {
     body = await doFetch();

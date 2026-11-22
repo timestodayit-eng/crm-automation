@@ -271,41 +271,69 @@ async function processQueue(siteId) {
 }
 
 // ---------- নিয়মিত চলা ----------
-async function runSite(siteId, { force = false } = {}) {
+// কল টানা (mConnex ধীর, কয়েক মিনিট লাগতে পারে) আর SMS পাঠানো আলাদাভাবে চলে,
+// যাতে mConnex-এর অপেক্ষায় লাইনের SMS আটকে না থাকে।
+const polling = new Map(); // siteId → শুরুর সময় (ms)
+
+function pollDue(site) {
+  const lastPollMs = site.last_poll_at ? time.parse(site.last_poll_at) : 0;
+  return Date.now() - lastPollMs >= (Number(site.poll_minutes) || 5) * 60 * 1000;
+}
+
+// ব্যাকগ্রাউন্ডে কল টানা শুরু করে; আগে থেকে চলতে থাকলে আবার শুরু করে না
+function startPoll(siteId) {
+  if (polling.has(siteId)) return { busy: true, since: polling.get(siteId) };
+  polling.set(siteId, Date.now());
+  const promise = pollSite(siteId)
+    .catch((e) => {
+      db().prepare('UPDATE sites SET last_poll_at = ?, last_poll_status = ? WHERE id = ?').run(
+        time.now(),
+        `ত্রুটি: ${e.message}`,
+        siteId
+      );
+      dbm.logEvent(siteId, 'error', `কল টানতে সমস্যা: ${e.message}`);
+      return null;
+    })
+    .finally(() => polling.delete(siteId));
+  return { started: true, promise };
+}
+
+function pollStatus(siteId) {
+  return polling.has(siteId) ? { running: true, since: polling.get(siteId) } : { running: false };
+}
+
+async function sendQueue(siteId) {
   if (running.has(siteId)) return { busy: true };
   running.add(siteId);
   try {
-    const site = getSite(siteId);
-    if (!site || (!site.enabled && !force)) return { skipped: true };
-    const lastPollMs = site.last_poll_at ? time.parse(site.last_poll_at) : 0;
-    const due = force || Date.now() - lastPollMs >= (Number(site.poll_minutes) || 5) * 60 * 1000;
-    let poll = null;
-    if (due) {
-      try {
-        poll = await pollSite(siteId);
-      } catch (e) {
-        db().prepare('UPDATE sites SET last_poll_at = ?, last_poll_status = ? WHERE id = ?').run(
-          time.now(),
-          `ত্রুটি: ${e.message}`,
-          siteId
-        );
-        dbm.logEvent(siteId, 'error', `কল টানতে সমস্যা: ${e.message}`);
-      }
-    }
-    const queue = await processQueue(siteId);
-    return { poll, queue };
+    return await processQueue(siteId);
   } finally {
     running.delete(siteId);
   }
 }
 
+// একবারে পুরোটা (কল টানা শেষ হওয়া পর্যন্ত অপেক্ষা করে, তারপর SMS) — টেস্ট ও স্ক্রিপ্টের জন্য
+async function runSite(siteId, { force = false } = {}) {
+  const site = getSite(siteId);
+  if (!site || (!site.enabled && !force)) return { skipped: true };
+  let poll = null;
+  if (force || pollDue(site)) {
+    const p = startPoll(siteId);
+    if (p.busy) return { busy: true };
+    poll = await p.promise;
+  }
+  const queue = await sendQueue(siteId);
+  return { poll, queue };
+}
+
 let timer = null;
 function start(intervalMs = 30000) {
   const tick = async () => {
-    const sites = db().prepare('SELECT id FROM sites WHERE enabled = 1').all();
+    const sites = db().prepare('SELECT * FROM sites WHERE enabled = 1').all();
     for (const s of sites) {
       try {
-        await runSite(s.id);
+        if (pollDue(s)) startPoll(s.id); // অপেক্ষা করে না
+        await sendQueue(s.id);
       } catch (e) {
         dbm.logEvent(s.id, 'error', `অপ্রত্যাশিত ত্রুটি: ${e.message}`);
       }
@@ -319,4 +347,4 @@ function stop() {
   if (timer) clearInterval(timer);
 }
 
-module.exports = { start, stop, runSite, pollSite, processQueue, assignAgent, handleMissed, inCooldown };
+module.exports = { start, stop, runSite, startPoll, pollStatus, sendQueue, pollSite, processQueue, assignAgent, handleMissed, inCooldown };
