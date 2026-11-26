@@ -67,18 +67,27 @@ const softcents = {
     return null;
   },
   async send(site, number, message) {
-    const res = await fetch(`${this.baseUrl()}/send-sms`, {
+    const params = {
+      clientId: site.sms_client_id,
+      clientSecret: site.sms_client_secret,
+      senderId: site.sms_sender_id,
+      numbers: '88' + localNumber(number),
+      contents: message,
+    };
+    let res = await fetch(`${this.baseUrl()}/send-sms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        clientId: site.sms_client_id,
-        clientSecret: site.sms_client_secret,
-        senderId: site.sms_sender_id,
-        numbers: '88' + localNumber(number),
-        contents: message,
-      }),
+      body: JSON.stringify(params),
       signal: AbortSignal.timeout(30000),
     });
+    // POST-এর ঠিকানা না পেলে (404/405) ওদের ডকুমেন্টের "Direct GET URL" পদ্ধতিতে একবার চেষ্টা
+    if (res.status === 404 || res.status === 405) {
+      await res.text().catch(() => {});
+      res = await fetch(`${this.baseUrl()}/send-sms?${new URLSearchParams(params)}`, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(30000),
+      });
+    }
     const { text, body } = await readJson(res);
     const raw = text.slice(0, 500);
     const code = body ? Number(body.response_code) : NaN;

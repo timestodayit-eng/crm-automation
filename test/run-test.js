@@ -75,8 +75,14 @@ async function main() {
     req.on('end', () => {
       res.setHeader('Content-Type', 'application/json');
       const goodCreds = (id, sec) => id === 'CID' && sec === 'CSECRET';
-      if (url.pathname === '/api/v1/send-sms' && req.method === 'POST') {
-        const b = JSON.parse(body);
+      if (url.pathname === '/api/v1/send-sms' && req.method === 'POST' && softMock.postBroken) {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/html');
+        return res.end('<html><body><h1>404 Not Found</h1><hr>nginx</body></html>');
+      }
+      if (url.pathname === '/api/v1/send-sms' && (req.method === 'POST' || softMock.postBroken)) {
+        const b = req.method === 'POST' ? JSON.parse(body) : Object.fromEntries(url.searchParams);
+        if (req.method === 'GET') b.viaGet = true;
         softSent.push({ ...b, contentType: req.headers['content-type'], accept: req.headers.accept });
         if (!goodCreds(b.clientId, b.clientSecret)) {
           res.statusCode = 401;
@@ -314,6 +320,11 @@ async function main() {
   db.prepare("UPDATE sms_log SET due_at = ? WHERE caller = '01810000035' AND status = 'queued'").run(time.minutesAgo(1));
   await engine.runSite(siteId, { force: true });
   ok(db.prepare("SELECT status FROM sms_log WHERE caller = '01810000035' ORDER BY id DESC").get().status === 'sent', 'সমস্যা মিটলে সেই SMS চলে গেছে');
+  softMock.postBroken = true;
+  const viaGet = await smsMod.send(db.prepare('SELECT * FROM sites WHERE id = ?').get(siteId), '01810000040', 'বাংলা টেস্ট & Hello');
+  const g = softSent[softSent.length - 1];
+  ok(viaGet.ok && g.viaGet && g.numbers === '8801810000040' && g.contents === 'বাংলা টেস্ট & Hello', 'POST-এ 404 এলে GET পদ্ধতিতে পাঠিয়েছে, বাংলা লেখাও ঠিক গেছে');
+  softMock.postBroken = false;
   db.prepare("UPDATE sites SET sms_client_id = ''").run();
   ok(/Client ID/.test(smsMod.missingConfig(db.prepare('SELECT * FROM sites WHERE id = ?').get(siteId))), 'Client ID না থাকলে কী বাকি সেটা বলে');
   db.prepare("UPDATE sites SET sms_client_id = 'CID'").run();
