@@ -482,7 +482,7 @@ ${rows.map((e) => `<tr><td class="nowrap">${esc(e.created_at)}</td><td>${e.level
       ['সাধারণ', ['name', 'enabled', 'dry_run']],
       ['mConnex', ['mconnex_login', 'mconnex_password', 'hotlines']],
       ['কল চেক', ['poll_minutes', 'lookback_minutes', 'page_limit', 'request_timeout_minutes']],
-      ['SMS-এর নিয়ম', ['sms_delay_minutes', 'skip_if_answered', 'cooldown_days', 'quiet_start', 'quiet_end', 'mobile_only', 'max_sms_per_run']],
+      ['SMS-এর নিয়ম', ['max_missed_age_minutes', 'sms_delay_minutes', 'skip_if_answered', 'cooldown_days', 'quiet_start', 'quiet_end', 'mobile_only', 'max_sms_per_run']],
       ['SMS কোম্পানি', ['sms_provider', 'sms_sender_id', 'sms_client_id', 'sms_client_secret', 'sms_api_key']],
       ['SMS-এর লেখা', ['sms_template']],
     ];

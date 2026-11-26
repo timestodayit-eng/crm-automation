@@ -82,8 +82,11 @@ async function main() {
           res.statusCode = 401;
           return res.end(JSON.stringify({ status: 401, success: false, response_code: 1011, message: 'Invalid client credentials' }));
         }
-        if (softMock.fail) return res.end(JSON.stringify({ status: 200, success: false, response_code: 1007, message: softMock.fail }));
-        return res.end(JSON.stringify({ status: 200, success: true, response_code: 202, message: 'SMS sent successfully' }));
+        if (softMock.fail) {
+          res.statusCode = softMock.failStatus || 402;
+          return res.end(JSON.stringify({ status: res.statusCode, success: false, response_code: softMock.failCode || 1005, message: softMock.fail }));
+        }
+        return res.end(JSON.stringify({ status: 200, success: true, response_code: 1000, message: 'SMS sent successfully' }));
       }
       if (url.pathname === '/api/v1/check-balance') {
         if (!goodCreds(url.searchParams.get('clientId'), url.searchParams.get('clientSecret'))) {
@@ -141,6 +144,9 @@ async function main() {
   ok(db.prepare('SELECT COUNT(*) c FROM calls').get().c === 25, '২৫টি পুরনো কল রেকর্ড হয়েছে (৩ পেজ জুড়ে)');
   ok(smsSent.length === 0, 'পুরনো কলারদের কোনো SMS যায়নি');
   ok(mock.logins === 1, 'নিজে থেকে mConnex-এ লগইন করেছে');
+  ok(!!db.prepare('SELECT baseline_at FROM sites WHERE id = ?').get(siteId).baseline_at, 'প্রথম সিঙ্কের সময় রেকর্ড হয়েছে');
+  // টেস্টের সুবিধার জন্য প্রথম সিঙ্ক এক ঘণ্টা আগে হয়েছে ধরে নেওয়া (নইলে "৩ মিনিট আগের" নকল কলগুলো তার আগের হয়ে যায়)
+  db.prepare('UPDATE sites SET baseline_at = ? WHERE id = ?').run(time.minutesAgo(60), siteId);
 
   console.log('\n২. নতুন মিসড কল — রাউন্ড রবিন ও একজনকে একটাই SMS');
   mock.rows.push(
@@ -162,6 +168,18 @@ async function main() {
   ok(!smsSent.some((s) => s.number.includes('9639104947')), 'ল্যান্ডলাইন/IP নাম্বারে SMS যায়নি');
   ok(!smsSent.some((s) => s.number.includes('01810000005')), 'রিসিভ হওয়া কলে SMS যায়নি');
   ok(!smsSent.some((s) => s.number.includes('01810000006')), 'অন্য হটলাইনের মিসড কলে SMS যায়নি');
+
+  console.log('\n২ক. পিছনে দেখার সময় বাড়ালেও পুরনো মিসড কলে SMS নয়');
+  db.prepare('UPDATE sites SET lookback_minutes = 1440, page_limit = 100 WHERE id = ?').run(siteId);
+  for (let i = 0; i < 40; i++) mock.rows.push(call(`0175000${String(i).padStart(4, '0')}`, 'MISSED CALL', 180 + i * 10)); // ৩–৯ ঘণ্টা আগের, আগে কখনো দেখা হয়নি
+  mock.rows.push(call('01750009999', 'MISSED CALL', 70)); // প্রথম সিঙ্কের আগের (৭০ মিনিট আগে)
+  let before2 = smsSent.length;
+  await engine.runSite(siteId, { force: true });
+  ok(smsSent.length === before2, `৪১টি পুরনো মিসড কল নতুন ধরা পড়লেও কোনো SMS যায়নি (গেছে ${smsSent.length - before2})`);
+  ok(db.prepare("SELECT COUNT(*) c FROM sms_log WHERE caller LIKE '01750%'").get().c === 0, 'পুরনো কলগুলো SMS লাইনেও ওঠেনি');
+  ok(db.prepare("SELECT COUNT(*) c FROM calls WHERE caller LIKE '01750%'").get().c === 41, 'তবে কলগুলো মিসড কল তালিকায় রেকর্ড হয়েছে');
+  ok(/৪১|41টি পুরনো মিসড কল বাদ/.test(db.prepare('SELECT last_poll_status FROM sites WHERE id = ?').get(siteId).last_poll_status), 'অবস্থায় "পুরনো মিসড কল বাদ" দেখাচ্ছে');
+  db.prepare('UPDATE sites SET lookback_minutes = 60, page_limit = 10 WHERE id = ?').run(siteId);
 
   console.log('\n৩. কুলডাউন — ৭ দিনের মধ্যে আবার SMS যাবে না');
   mock.rows.push(call('01810000002'));
@@ -277,8 +295,25 @@ async function main() {
   softMock.fail = 'Insufficient balance';
   mock.rows.push(call('01810000033'));
   await engine.runSite(siteId, { force: true });
-  ok(/Insufficient balance/.test(db.prepare("SELECT reason FROM sms_log WHERE caller = '01810000033' ORDER BY id DESC").get().reason), 'ব্যালেন্স শেষ হলে কারণ দেখাচ্ছে');
-  softMock.fail = null;
+  const balReason = db.prepare("SELECT reason FROM sms_log WHERE caller = '01810000033' ORDER BY id DESC").get().reason;
+  ok(/ব্যালেন্স শেষ/.test(balReason) && /1005/.test(balReason), 'ব্যালেন্স শেষ হলে (কোড 1005) বাংলায় কারণ দেখাচ্ছে');
+  // 1007: Sender ID-র গেটওয়ে বন্ধ — বাকিগুলো থামবে
+  Object.assign(softMock, { fail: 'The SMS gateway associated with the selected sender ID is currently unavailable.', failCode: 1007, failStatus: 200 });
+  mock.rows.push(call('01810000034'), call('01810000035'));
+  tries = softSent.length;
+  await engine.runSite(siteId, { force: true });
+  const r1007 = db.prepare("SELECT status, reason FROM sms_log WHERE caller = '01810000034' ORDER BY id DESC").get();
+  ok(softSent.length === tries + 1 && r1007.status === 'failed' && /Sender ID-র গেটওয়ে/.test(r1007.reason), 'কোড 1007-এ বাংলা কারণ দেখায় আর বাকি SMS থামে');
+  // 1008: সাময়িক সমস্যা — ব্যর্থ নয়, লাইনে থেকে পরে আবার
+  Object.assign(softMock, { fail: 'Telecom operator network temporary issue', failCode: 1008, failStatus: 500 });
+  db.prepare("UPDATE sms_log SET due_at = ? WHERE caller = '01810000035' AND status = 'queued'").run(time.minutesAgo(1));
+  await engine.runSite(siteId, { force: true });
+  const r1008 = db.prepare("SELECT status, reason, due_at FROM sms_log WHERE caller = '01810000035' ORDER BY id DESC").get();
+  ok(r1008.status === 'queued' && /আবার চেষ্টা করবে/.test(r1008.reason) && r1008.due_at > time.now(), 'কোড 1008-এ SMS ব্যর্থ না হয়ে ১০ মিনিট পরে আবার চেষ্টার জন্য লাইনে থাকে');
+  Object.assign(softMock, { fail: null, failCode: null, failStatus: null });
+  db.prepare("UPDATE sms_log SET due_at = ? WHERE caller = '01810000035' AND status = 'queued'").run(time.minutesAgo(1));
+  await engine.runSite(siteId, { force: true });
+  ok(db.prepare("SELECT status FROM sms_log WHERE caller = '01810000035' ORDER BY id DESC").get().status === 'sent', 'সমস্যা মিটলে সেই SMS চলে গেছে');
   db.prepare("UPDATE sites SET sms_client_id = ''").run();
   ok(/Client ID/.test(smsMod.missingConfig(db.prepare('SELECT * FROM sites WHERE id = ?').get(siteId))), 'Client ID না থাকলে কী বাকি সেটা বলে');
   db.prepare("UPDATE sites SET sms_client_id = 'CID'").run();

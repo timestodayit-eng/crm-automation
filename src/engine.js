@@ -152,7 +152,7 @@ async function pollSite(siteId) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   const hotlines = hotlineSet(site);
-  const counts = { new_calls: 0, missed: 0, queued: 0 };
+  const counts = { new_calls: 0, missed: 0, queued: 0, old: 0 };
 
   d.transaction(() => {
     const fresh = [];
@@ -176,20 +176,33 @@ async function pollSite(siteId) {
 
     if (!site.baseline_done) {
       // প্রথমবার: আগের কলগুলো শুধু রেকর্ড হবে, পুরনো কলারদের SMS যাবে না
-      d.prepare('UPDATE sites SET baseline_done = 1 WHERE id = ?').run(site.id);
+      d.prepare('UPDATE sites SET baseline_done = 1, baseline_at = ? WHERE id = ?').run(endDate, site.id);
       dbm.logEvent(site.id, 'info', `প্রথম সিঙ্ক: ${fresh.length}টি পুরনো কল রেকর্ড হলো, এগুলোতে SMS যাবে না`);
       return;
     }
+    // পুরনো মিসড কলে SMS নয়: প্রথম সিঙ্কের আগের, বা নির্দিষ্ট মিনিটের বেশি পুরনো কল শুধু রেকর্ড হবে।
+    // (পিছনে দেখার সময় বাড়ালে বা সার্ভার অনেকক্ষণ বন্ধ থাকলে একসাথে শত শত পুরনো কলারের কাছে SMS যাওয়া ঠেকায়)
+    const ageCutoff = time.minutesAgo(Number(site.max_missed_age_minutes) || 120);
+    const cutoff = site.baseline_at && site.baseline_at > ageCutoff ? site.baseline_at : ageCutoff;
     for (const r of fresh) {
       if (String(r.status).toUpperCase() !== 'MISSED CALL') continue;
+      if (String(r.date) < cutoff) {
+        counts.old++;
+        continue;
+      }
       counts.missed++;
       if (handleMissed(site, r, hotlines) === 'queued') counts.queued++;
+    }
+    if (counts.old) {
+      dbm.logEvent(site.id, 'info', `${counts.old}টি পুরনো মিসড কল (${cutoff}-এর আগের) শুধু রেকর্ড হলো, এগুলোতে SMS যাবে না`);
     }
   })();
 
   d.prepare('UPDATE sites SET last_poll_at = ?, last_poll_status = ? WHERE id = ?').run(
     time.now(),
-    `ঠিক আছে — ${rows.length}টি কল দেখা, ${counts.new_calls}টি নতুন, ${counts.missed}টি নতুন মিসড কল, ${counts.queued}টি SMS লাইনে`,
+    `ঠিক আছে — ${rows.length}টি কল দেখা, ${counts.new_calls}টি নতুন, ${counts.missed}টি নতুন মিসড কল, ${counts.queued}টি SMS লাইনে${
+      counts.old ? `, ${counts.old}টি পুরনো মিসড কল বাদ` : ''
+    }`,
     site.id
   );
   return counts;
@@ -260,6 +273,16 @@ async function processQueue(siteId) {
         'UPDATE callers SET last_sms_at = ?, sms_count = sms_count + 1 WHERE site_id = ? AND number = ?'
       ).run(time.now(), site.id, item.caller);
       sent++;
+    } else if (result.retry && Date.now() - time.parse(item.missed_at || time.now()) < 12 * 3600 * 1000) {
+      // সাময়িক সমস্যা: লাইনেই থাকবে, ১০ মিনিট পরে আবার চেষ্টা (মিসড কলের ১২ ঘণ্টা পর্যন্ত)
+      d.prepare("UPDATE sms_log SET reason = ?, provider_response = ?, due_at = ? WHERE id = ?").run(
+        `আবার চেষ্টা করবে — ${result.error}`,
+        result.raw,
+        time.addMinutes(time.now(), 10),
+        item.id
+      );
+      dbm.logEvent(site.id, 'error', `SMS সাময়িকভাবে যায়নি, ১০ মিনিট পরে আবার চেষ্টা: ${result.error}`);
+      break;
     } else {
       update.run({ ...base, ...agentFields, id: item.id, status: 'failed', reason: result.error, provider_response: result.raw, sent_at: time.now() });
       dbm.logEvent(site.id, 'error', `${item.caller}-এ SMS ব্যর্থ: ${result.error}`);

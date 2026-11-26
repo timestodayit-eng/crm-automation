@@ -18,6 +18,7 @@ const SITE_SETTINGS = [
   { key: 'lookback_minutes', label: 'প্রতিবার কত মিনিট পিছনের কল দেখবে', type: 'int', def: 60, min: 10, max: 1440, help: 'চেকের বিরতি আর mConnex-এর উত্তরের সময় মিলিয়ে তার চেয়ে বড় রাখুন, যাতে কোনো কল বাদ না পড়ে' },
   { key: 'page_limit', label: 'প্রতি পেজে কতটা কল আনবে', type: 'int', def: 500, min: 10, max: 2000, help: 'mConnex প্রতিটা অনুরোধে অনেক সময় নেয়, তাই বড় রাখুন যাতে একবারেই সব কল চলে আসে' },
   { key: 'request_timeout_minutes', label: 'mConnex-এর উত্তরের জন্য সর্বোচ্চ অপেক্ষা (মিনিট)', type: 'int', def: 10, min: 1, max: 30, help: 'এর মধ্যে উত্তর না এলে এবারের চেক বাদ দিয়ে পরের বার আবার চেষ্টা করবে' },
+  { key: 'max_missed_age_minutes', label: 'কত মিনিটের পুরনো মিসড কল পর্যন্ত SMS যাবে', type: 'int', def: 120, min: 10, max: 1440, help: 'এর চেয়ে পুরনো মিসড কল শুধু রেকর্ড হবে, SMS যাবে না — পিছনে দেখার সময় বাড়ালে বা সার্ভার বন্ধ থাকার পরে একসাথে পুরনো কলারদের SMS যাওয়া ঠেকায়' },
   { key: 'sms_delay_minutes', label: 'মিসড কলের কত মিনিট পরে SMS যাবে', type: 'int', def: 5, min: 0, max: 240, help: 'এর মধ্যে কলার আবার কল করে কথা বললে SMS যাবে না' },
   { key: 'skip_if_answered', label: 'পরে কল রিসিভ হলে SMS বাদ দেবে', type: 'bool', def: 1 },
   { key: 'cooldown_days', label: 'একই নাম্বারে আবার SMS যাওয়ার আগে কত দিন অপেক্ষা', type: 'int', def: 7, min: 0, max: 365, help: '০ দিলে প্রতিবার মিসড কলে SMS যাবে (সুপারিশ করা হয় না)' },
@@ -64,6 +65,7 @@ function init(dbPath) {
       mconnex_token TEXT,
       rr_last_agent_id INTEGER,
       baseline_done INTEGER NOT NULL DEFAULT 0,
+      baseline_at TEXT,
       last_poll_at TEXT,
       last_poll_status TEXT,
       created_at TEXT NOT NULL
@@ -136,6 +138,9 @@ function init(dbPath) {
     const type = s.type === 'int' || s.type === 'bool' ? 'INTEGER' : 'TEXT';
     db.exec(`ALTER TABLE sites ADD COLUMN ${s.key} ${type} NOT NULL DEFAULT ${def}`);
   }
+  if (!existing.has('baseline_at')) db.exec('ALTER TABLE sites ADD COLUMN baseline_at TEXT');
+  // আগে থেকে চলা সাইটে প্রথম সিঙ্কের সময় জানা নেই — এই আপডেটের সময় থেকেই গোনা শুরু
+  db.prepare('UPDATE sites SET baseline_at = ? WHERE baseline_done = 1 AND baseline_at IS NULL').run(time.now());
   return db;
 }
 

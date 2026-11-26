@@ -32,6 +32,19 @@ async function readJson(res) {
 }
 
 // ---------- Softcents (sms.softcents.com) ----------
+// ওদের ডকুমেন্টের "API Status & Error Codes" তালিকা অনুযায়ী
+const SOFTCENTS_ERRORS = {
+  1001: 'Client ID বা Client Secret ভুল — Softcents প্যানেল থেকে মিলিয়ে দেখুন',
+  1002: 'সার্ভারের IP অনুমোদিত তালিকায় নেই — Softcents-এর Security Settings-এ VPS-এর IP যোগ করুন',
+  1003: 'প্রয়োজনীয় তথ্য বা SMS-এর লেখা খালি',
+  1004: 'নাম্বারের ফরম্যাট সঠিক নয়',
+  1005: 'Softcents ব্যালেন্স শেষ — রিচার্জ করুন',
+  1007: 'এই Sender ID-র গেটওয়ে এখন বন্ধ — Softcents সাপোর্টে যোগাযোগ করুন',
+  1008: 'অপারেটরের নেটওয়ার্কে সাময়িক সমস্যা — কিছুক্ষণ পরে নিজে আবার চেষ্টা করবে',
+};
+const SOFTCENTS_FATAL = new Set([1001, 1002, 1005, 1007]); // বাকি SMS চেষ্টা করে লাভ নেই
+const SOFTCENTS_RETRY = new Set([1008]); // সাময়িক — ব্যর্থ না ধরে পরে আবার
+
 const softcents = {
   label: 'Softcents',
   baseUrl() {
@@ -57,14 +70,19 @@ const softcents = {
     });
     const { text, body } = await readJson(res);
     const raw = text.slice(0, 500);
-    if (res.ok && body && body.success === true) return { ok: true, raw };
-    const msg = (body && (body.message || body.error_code)) || `HTTP ${res.status}`;
-    const code = body && body.response_code ? ` (কোড ${body.response_code})` : '';
+    const code = body ? Number(body.response_code) : NaN;
+    if (res.ok && body && (body.success === true || code === 1000)) return { ok: true, raw };
+    const theirs = (body && (body.message || body.error_code)) || `HTTP ${res.status}`;
+    const ours = SOFTCENTS_ERRORS[code];
+    const error = `Softcents: ${ours ? `${ours} (${theirs})` : theirs}${Number.isFinite(code) ? ` [কোড ${code}]` : ''}`;
+    const retry = SOFTCENTS_RETRY.has(code) || (!Number.isFinite(code) && res.status >= 500);
     const fatal =
+      SOFTCENTS_FATAL.has(code) ||
       res.status === 401 ||
+      res.status === 402 ||
       res.status === 403 ||
-      /balance|insufficient|credential|client|secret|unauthori|sender|invalid.?key|expired|inactive|suspend/i.test(String(msg));
-    return { ok: false, error: `Softcents: ${msg}${code}`, raw, fatal };
+      (!Number.isFinite(code) && /balance|insufficient|credential|unauthori|gateway/i.test(String(theirs)));
+    return { ok: false, error, raw, fatal, retry };
   },
   async balance(site) {
     const qs = new URLSearchParams({ clientId: site.sms_client_id, clientSecret: site.sms_client_secret });
@@ -154,7 +172,7 @@ async function send(site, number, message) {
   try {
     return await p.send(site, number, message);
   } catch (e) {
-    return { ok: false, error: `${p.label}-এর সার্ভারে পৌঁছানো যায়নি: ${e.cause?.code || e.message}`, raw: '', fatal: true };
+    return { ok: false, error: `${p.label}-এর সার্ভারে পৌঁছানো যায়নি: ${e.cause?.code || e.message}`, raw: '', fatal: true, retry: true };
   }
 }
 
