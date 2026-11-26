@@ -31,6 +31,17 @@ async function readJson(res) {
   return { text, body };
 }
 
+// উত্তরে কোনো বার্তা না থাকলে HTTP কোডের সাথে উত্তরের প্রথম অংশটুকু দেখানো (HTML হলে ট্যাগ বাদ দিয়ে)
+function httpFallback(res, text) {
+  const snippet = String(text || '')
+    .replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+  return `HTTP ${res.status}${snippet ? ` — ${snippet}` : ''}`;
+}
+
 // ---------- Softcents (sms.softcents.com) ----------
 // ওদের ডকুমেন্টের "API Status & Error Codes" তালিকা অনুযায়ী
 const SOFTCENTS_ERRORS = {
@@ -72,7 +83,7 @@ const softcents = {
     const raw = text.slice(0, 500);
     const code = body ? Number(body.response_code) : NaN;
     if (res.ok && body && (body.success === true || code === 1000)) return { ok: true, raw };
-    const theirs = (body && (body.message || body.error_code)) || `HTTP ${res.status}`;
+    const theirs = (body && (body.message || body.error_code || body.error)) || httpFallback(res, text);
     const ours = SOFTCENTS_ERRORS[code];
     const error = `Softcents: ${ours ? `${ours} (${theirs})` : theirs}${Number.isFinite(code) ? ` [কোড ${code}]` : ''}`;
     const retry = SOFTCENTS_RETRY.has(code) || (!Number.isFinite(code) && res.status >= 500);
@@ -81,6 +92,7 @@ const softcents = {
       res.status === 401 ||
       res.status === 402 ||
       res.status === 403 ||
+      res.status === 404 ||
       (!Number.isFinite(code) && /balance|insufficient|credential|unauthori|gateway/i.test(String(theirs)));
     return { ok: false, error, raw, fatal, retry };
   },
