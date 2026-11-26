@@ -264,7 +264,7 @@ async function processQueue(siteId) {
       update.run({ ...base, ...agentFields, id: item.id, status: 'failed', reason: result.error, provider_response: result.raw, sent_at: time.now() });
       dbm.logEvent(site.id, 'error', `${item.caller}-এ SMS ব্যর্থ: ${result.error}`);
       // ব্যালেন্স বা কনফিগারেশনের সমস্যা হলে বাকিগুলো এখন আর চেষ্টা করে লাভ নেই
-      if (/ব্যালেন্স|API Key|Sender ID|হোয়াইটলিস্ট|পৌঁছানো/.test(result.error)) break;
+      if (result.fatal) break;
     }
   }
   return { sent };

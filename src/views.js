@@ -109,6 +109,10 @@ function settingField(s, value) {
   if (s.type === 'bool') {
     return `<label class="f"><span class="switch"><input type="hidden" ${name} value="0"><input type="checkbox" ${name} value="1" ${value ? 'checked' : ''}> ${esc(s.label)}</span>${help}</label>`;
   }
+  if (s.type === 'select') {
+    const opts = s.options.map(([v, l]) => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(l)}</option>`).join('');
+    return `<label class="f"><span>${esc(s.label)}</span><select ${name}>${opts}</select>${help}</label>`;
+  }
   if (s.type === 'textarea') {
     return `<label class="f" style="grid-column:1/-1"><span>${esc(s.label)}</span><textarea ${name} rows="4">${esc(value)}</textarea>${help}</label>`;
   }

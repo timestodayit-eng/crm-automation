@@ -65,6 +65,39 @@ async function main() {
     res.end(JSON.stringify({ response_code: 202, success_message: 'SMS Submitted Successfully' }));
   });
 
+  // নকল Softcents: POST /send-sms (JSON), GET /check-balance
+  const softSent = [];
+  const softMock = { fail: null };
+  const softSrv = await listen((req, res) => {
+    const url = new URL(req.url, 'http://x');
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      res.setHeader('Content-Type', 'application/json');
+      const goodCreds = (id, sec) => id === 'CID' && sec === 'CSECRET';
+      if (url.pathname === '/api/v1/send-sms' && req.method === 'POST') {
+        const b = JSON.parse(body);
+        softSent.push({ ...b, contentType: req.headers['content-type'], accept: req.headers.accept });
+        if (!goodCreds(b.clientId, b.clientSecret)) {
+          res.statusCode = 401;
+          return res.end(JSON.stringify({ status: 401, success: false, response_code: 1011, message: 'Invalid client credentials' }));
+        }
+        if (softMock.fail) return res.end(JSON.stringify({ status: 200, success: false, response_code: 1007, message: softMock.fail }));
+        return res.end(JSON.stringify({ status: 200, success: true, response_code: 202, message: 'SMS sent successfully' }));
+      }
+      if (url.pathname === '/api/v1/check-balance') {
+        if (!goodCreds(url.searchParams.get('clientId'), url.searchParams.get('clientSecret'))) {
+          res.statusCode = 401;
+          return res.end(JSON.stringify({ success: false, message: 'Invalid client credentials' }));
+        }
+        return res.end(JSON.stringify({ status: 200, success: true, response_code: 200, balance: 1250.5, currency: 'BDT' }));
+      }
+      res.statusCode = 404;
+      res.end('{}');
+    });
+  });
+  process.env.SOFTCENTS_API_URL = `http://127.0.0.1:${softSrv.address().port}/api/v1`;
+
   process.env.MCONNEX_BASE_URL = `http://127.0.0.1:${mconnexSrv.address().port}/api/v1`;
   process.env.SMS_API_URL = `http://127.0.0.1:${smsSrv.address().port}/api/smsapi`;
   process.env.ADMIN_USER = 'admin';
@@ -90,8 +123,8 @@ async function main() {
   const siteId = db
     .prepare(
       `INSERT INTO sites (name, enabled, dry_run, mconnex_login, mconnex_password, hotlines, sms_delay_minutes, quiet_start, quiet_end,
-        cooldown_days, sms_api_key, sms_sender_id, page_limit, created_at)
-       VALUES ('Test Site', 1, 0, 'Test_User', 'secret', '01969918811', 0, '00:00', '00:00', 7, 'KEY', 'SENDER', 10, ?)`
+        cooldown_days, sms_provider, sms_api_key, sms_sender_id, page_limit, created_at)
+       VALUES ('Test Site', 1, 0, 'Test_User', 'secret', '01969918811', 0, '00:00', '00:00', 7, 'bulksmsbd', 'KEY', 'SENDER', 10, ?)`
     )
     .run(time.now()).lastInsertRowid;
   const addAgent = (name, number, order) =>
@@ -213,7 +246,44 @@ async function main() {
   mock.delay = 0;
   await new Promise((r) => setTimeout(r, 1200)); // কেটে দেওয়া অনুরোধটা নকল সার্ভারে শেষ হতে দেওয়া
 
-  console.log('\n৯. প্যানেল');
+  console.log('\n৯. Softcents দিয়ে SMS');
+  const smsMod = require('../src/sms');
+  db.prepare("UPDATE sites SET sms_provider = 'softcents', sms_client_id = 'CID', sms_client_secret = 'CSECRET', sms_sender_id = 'COASTAL'").run();
+  const bulkBefore = smsSent.length;
+  mock.rows.push(call('01810000030'));
+  await engine.runSite(siteId, { force: true });
+  const sc = softSent[softSent.length - 1];
+  ok(sc && sc.numbers === '8801810000030' && sc.senderId === 'COASTAL', 'Softcents-এ সঠিক নাম্বার (88 সহ) আর Sender ID গেছে');
+  ok(sc.clientId === 'CID' && sc.clientSecret === 'CSECRET', 'Client ID আর Client Secret JSON-এ গেছে');
+  ok(/application\/json/.test(sc.contentType) && /application\/json/.test(sc.accept), 'Accept আর Content-Type হেডার application/json');
+  ok(/Agent [A-C]/.test(sc.contents) && /0171100000\d/.test(sc.contents), 'SMS-এর লেখায় এজেন্টের নাম আর নাম্বার বসেছে');
+  ok(smsSent.length === bulkBefore, 'Softcents বেছে নিলে BulkSMSBD-তে কিছু যায়নি');
+  ok(db.prepare("SELECT status FROM sms_log WHERE caller = '01810000030' ORDER BY id DESC").get().status === 'sent', 'লগে "পাঠানো হয়েছে" দেখাচ্ছে');
+  const site = db.prepare('SELECT * FROM sites WHERE id = ?').get(siteId);
+  const bal = await smsMod.balance(site);
+  ok(bal.ok && bal.text === '1250.5 BDT', 'Softcents ব্যালেন্স দেখা যাচ্ছে');
+  // ভুল Secret হলে: ব্যর্থ, আর এবারের বাকি SMS চেষ্টা বন্ধ
+  db.prepare("UPDATE sites SET sms_client_secret = 'WRONG'").run();
+  mock.rows.push(call('01810000031'), call('01810000032'));
+  let tries = softSent.length;
+  await engine.runSite(siteId, { force: true });
+  ok(softSent.length === tries + 1, 'ভুল Secret-এ প্রথমটা ব্যর্থ হলে বাকিগুলো আর চেষ্টা করেনি');
+  const failed = db.prepare("SELECT status, reason FROM sms_log WHERE caller = '01810000031' ORDER BY id DESC").get();
+  ok(failed.status === 'failed' && /Invalid client credentials/.test(failed.reason), 'ব্যর্থ SMS-এ Softcents-এর কারণ লেখা আছে');
+  ok(db.prepare("SELECT status FROM sms_log WHERE caller = '01810000032' ORDER BY id DESC").get().status === 'queued', 'বাকি SMS লাইনে অপেক্ষা করছে');
+  db.prepare("UPDATE sites SET sms_client_secret = 'CSECRET'").run();
+  await engine.runSite(siteId, { force: true });
+  ok(!!softSent.find((s) => s.numbers === '8801810000032'), 'Secret ঠিক করার পর লাইনের SMS চলে গেছে');
+  softMock.fail = 'Insufficient balance';
+  mock.rows.push(call('01810000033'));
+  await engine.runSite(siteId, { force: true });
+  ok(/Insufficient balance/.test(db.prepare("SELECT reason FROM sms_log WHERE caller = '01810000033' ORDER BY id DESC").get().reason), 'ব্যালেন্স শেষ হলে কারণ দেখাচ্ছে');
+  softMock.fail = null;
+  db.prepare("UPDATE sites SET sms_client_id = ''").run();
+  ok(/Client ID/.test(smsMod.missingConfig(db.prepare('SELECT * FROM sites WHERE id = ?').get(siteId))), 'Client ID না থাকলে কী বাকি সেটা বলে');
+  db.prepare("UPDATE sites SET sms_client_id = 'CID'").run();
+
+  console.log('\n১০. প্যানেল');
   const { createApp } = require('../src/server');
   const app = createApp();
   const srv = await new Promise((r) => {
@@ -260,7 +330,13 @@ async function main() {
   ok(st.name === 'Coastal' && st.cooldown_days === 5 && st.enabled === 1, 'সেটিংস সেভ হচ্ছে');
   ok(st.mconnex_password === 'secret', 'পাসওয়ার্ডের ঘর খালি রাখলে আগের পাসওয়ার্ড থাকছে');
   const settingsHtml = await (await req(`/sites/${siteId}/settings`)).text();
-  ok(!settingsHtml.includes('secret') && !settingsHtml.includes('"KEY"'), 'সেটিংস পেজে পাসওয়ার্ড বা API Key দেখা যায় না');
+  ok(!/value="(secret|KEY)"/.test(settingsHtml) && !settingsHtml.includes('CSECRET'), 'সেটিংস পেজে পাসওয়ার্ড, API Key বা Client Secret দেখা যায় না');
+  ok(/<option value="softcents" selected>/.test(settingsHtml), 'সেটিংসে SMS কোম্পানি বাছাইয়ের ঘরে Softcents বেছে রাখা আছে');
+  await req(`/sites/${siteId}/settings`, new URLSearchParams([['sms_provider', 'hacked'], ['sms_client_secret', '']]));
+  ok(db.prepare('SELECT sms_provider, sms_client_secret FROM sites WHERE id = ?').get(siteId).sms_provider === 'softcents', 'তালিকার বাইরের কোম্পানি সেভ হয় না');
+  const balRes = await req(`/sites/${siteId}/sms-balance`, { x: '1' });
+  const afterBal = await (await req(balRes.headers.get('location'))).text();
+  ok(afterBal.includes('1250.5 BDT'), 'প্যানেলের "SMS ব্যালেন্স দেখুন" বোতাম কাজ করছে');
   const xss = await req('/sites', { name: '<script>x</script>' });
   const page = await (await req(xss.headers.get('location').replace('/settings', ''))).text();
   ok(!page.includes('<script>x</script>'), 'নামের ভেতরের কোড নিরাপদভাবে দেখানো হচ্ছে');
@@ -268,6 +344,7 @@ async function main() {
   srv.close();
   mconnexSrv.close();
   smsSrv.close();
+  softSrv.close();
   console.log(`\nসব ${pass}টি টেস্ট পাস ✅`);
 }
 

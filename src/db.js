@@ -26,8 +26,21 @@ const SITE_SETTINGS = [
   { key: 'mobile_only', label: 'শুধু মোবাইল নাম্বারে SMS (01XXXXXXXXX)', type: 'bool', def: 1, help: '09xxx এর মতো ল্যান্ডলাইন/IP নাম্বার বাদ' },
   { key: 'max_sms_per_run', label: 'প্রতিবারে সর্বোচ্চ কতটা SMS পাঠাবে', type: 'int', def: 30, min: 1, max: 500 },
   { key: 'sms_template', label: 'SMS-এর লেখা', type: 'textarea', def: DEFAULT_TEMPLATE, help: 'ব্যবহার করা যাবে: {agent_name} {agent_number} {site_name} {hotline} {caller}' },
+  {
+    key: 'sms_provider',
+    label: 'SMS কোম্পানি',
+    type: 'select',
+    def: 'softcents',
+    options: [
+      ['softcents', 'Softcents (sms.softcents.com)'],
+      ['bulksmsbd', 'BulkSMSBD (bulksmsbd.net)'],
+    ],
+    help: 'যে কোম্পানির অ্যাকাউন্ট থেকে SMS যাবে। নিচে শুধু সেই কোম্পানির ঘরগুলো পূরণ করলেই হবে',
+  },
+  { key: 'sms_client_id', label: 'Softcents Client ID', type: 'text', def: '' },
+  { key: 'sms_client_secret', label: 'Softcents Client Secret', type: 'secret', def: '' },
   { key: 'sms_api_key', label: 'BulkSMSBD API Key', type: 'secret', def: '' },
-  { key: 'sms_sender_id', label: 'BulkSMSBD Sender ID', type: 'text', def: '' },
+  { key: 'sms_sender_id', label: 'Sender ID', type: 'text', def: '', help: 'SMS কোন নামে বা নাম্বারে যাবে — কোম্পানির প্যানেলে অনুমোদিত Sender ID দিন' },
 ];
 
 let db;

@@ -78,9 +78,9 @@ sudo certbot --nginx -d sms.coastalmanpoweragency.com
 ## প্রথমবার সেটআপ (প্যানেল থেকে)
 
 1. প্যানেলে লগইন করে **নতুন সাইট যোগ করুন**।
-2. **সেটিংস** → mConnex লগইন নাম ও পাসওয়ার্ড, BulkSMSBD API Key ও Sender ID দিন → সেভ।
+2. **সেটিংস** → mConnex লগইন নাম ও পাসওয়ার্ড দিন। **SMS কোম্পানি** বেছে নিন (Softcents বা BulkSMSBD) আর সেই কোম্পানির তথ্য দিন — Softcents হলে Client ID, Client Secret ও Sender ID; BulkSMSBD হলে API Key ও Sender ID → সেভ।
 3. **সারাংশ** → "mConnex লগইন টেস্ট" চাপুন। সফল হলে হটলাইন নাম্বার নিজে বসে যায়।
-4. **BulkSMSBD প্যানেলে** IP হোয়াইটলিস্ট বন্ধ করুন, অথবা VPS-এর IP যোগ করুন।
+4. "SMS ব্যালেন্স দেখুন" চাপুন — ব্যালেন্স দেখালে বুঝবেন SMS কোম্পানির তথ্য ঠিক আছে। (BulkSMSBD হলে ওদের প্যানেলে IP হোয়াইটলিস্ট বন্ধ করুন, অথবা VPS-এর IP যোগ করুন।)
 5. "টেস্ট SMS পাঠান"-এ নিজের নাম্বার দিয়ে দেখুন SMS কেমন যায়।
 6. **এজেন্ট** → "একসাথে অনেক এজেন্ট যোগ"-এ Sheet থেকে নাম আর নাম্বার পেস্ট করুন।
 7. **সেটিংস** → "সিস্টেম চালু" টিক দিন, **টেস্ট মোড চালু রেখেই**।
@@ -125,6 +125,6 @@ pm2 restart missed-call-sms
 | `src/server.js` | প্যানেল (Express) আর চালু হওয়ার জায়গা |
 | `src/engine.js` | কল টানা, এজেন্ট বণ্টন, SMS লাইন ও পাঠানো |
 | `src/mconnex.js` | mConnex লগইন ও কল রিপোর্ট |
-| `src/sms.js` | BulkSMSBD দিয়ে SMS পাঠানো |
+| `src/sms.js` | SMS পাঠানো (Softcents, BulkSMSBD) |
 | `src/db.js` | ডেটাবেস (SQLite) আর সব সেটিংসের তালিকা |
 | `test/run-test.js` | পুরো সিস্টেমের টেস্ট |

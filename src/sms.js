@@ -1,17 +1,6 @@
-// BulkSMSBD (bulksmsbd.net) দিয়ে SMS পাঠানো
-// সফল হলে উত্তরে response_code 202 আসে।
-
-const ERRORS = {
-  1001: 'নাম্বার সঠিক নয়',
-  1002: 'Sender ID ভুল বা বন্ধ',
-  1003: 'প্রয়োজনীয় তথ্য নেই',
-  1005: 'BulkSMSBD-এর ভেতরের ত্রুটি',
-  1006: 'ব্যালেন্সের মেয়াদ নেই',
-  1007: 'ব্যালেন্স শেষ',
-  1011: 'ইউজার পাওয়া যায়নি',
-  1012: 'মাস্কিং SMS বাংলায় পাঠাতে হবে',
-  1032: 'সার্ভারের IP হোয়াইটলিস্টে নেই — BulkSMSBD প্যানেলে IP হোয়াইটলিস্ট বন্ধ করুন বা VPS-এর IP যোগ করুন',
-};
+// SMS পাঠানো — সাইটের সেটিংসে যে কোম্পানি বেছে নেওয়া আছে, সেটা দিয়ে।
+// প্রতিটা কোম্পানির send() একই রকম উত্তর দেয়: { ok, error?, raw, fatal? }
+// fatal = true মানে কনফিগারেশন/ব্যালেন্সের সমস্যা — এবারের বাকি SMS চেষ্টা করে লাভ নেই।
 
 const MOBILE_RE = /^01[3-9]\d{8}$/;
 
@@ -27,43 +16,157 @@ function isMobile(raw) {
   return MOBILE_RE.test(localNumber(raw));
 }
 
-function apiUrl() {
-  return process.env.SMS_API_URL || 'https://bulksmsbd.net/api/smsapi';
-}
-
-async function send(site, number, message) {
-  if (!site.sms_api_key || !site.sms_sender_id) {
-    return { ok: false, error: 'BulkSMSBD API Key বা Sender ID সেটিংসে দেওয়া নেই', raw: '' };
-  }
-  const to = '88' + localNumber(number);
-  const qs = new URLSearchParams({
-    api_key: site.sms_api_key,
-    type: 'text',
-    number: to,
-    senderid: site.sms_sender_id,
-    message,
-  });
-  let text = '';
-  try {
-    const res = await fetch(`${apiUrl()}?${qs.toString()}`, { signal: AbortSignal.timeout(30000) });
-    text = await res.text();
-    let body = null;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      /* নিচে দেখা হচ্ছে */
-    }
-    const code = body ? Number(body.response_code) : NaN;
-    if (code === 202) return { ok: true, raw: text.slice(0, 500) };
-    const why = ERRORS[code] || (body && (body.error_message || body.success_message)) || `HTTP ${res.status}`;
-    return { ok: false, error: `${why}${Number.isFinite(code) ? ` (কোড ${code})` : ''}`, raw: text.slice(0, 500) };
-  } catch (e) {
-    return { ok: false, error: `SMS সার্ভারে পৌঁছানো যায়নি: ${e.message}`, raw: text.slice(0, 500) };
-  }
-}
-
 function render(template, vars) {
   return String(template || '').replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : m));
 }
 
-module.exports = { send, render, isMobile, localNumber };
+async function readJson(res) {
+  const text = await res.text();
+  let body = null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    /* JSON নয় */
+  }
+  return { text, body };
+}
+
+// ---------- Softcents (sms.softcents.com) ----------
+const softcents = {
+  label: 'Softcents',
+  baseUrl() {
+    return (process.env.SOFTCENTS_API_URL || 'https://sms.softcents.com/api/v1').replace(/\/+$/, '');
+  },
+  missing(site) {
+    if (!site.sms_client_id || !site.sms_client_secret) return 'Softcents Client ID বা Client Secret সেটিংসে দেওয়া নেই';
+    if (!site.sms_sender_id) return 'Sender ID সেটিংসে দেওয়া নেই';
+    return null;
+  },
+  async send(site, number, message) {
+    const res = await fetch(`${this.baseUrl()}/send-sms`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        clientId: site.sms_client_id,
+        clientSecret: site.sms_client_secret,
+        senderId: site.sms_sender_id,
+        numbers: '88' + localNumber(number),
+        contents: message,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    const { text, body } = await readJson(res);
+    const raw = text.slice(0, 500);
+    if (res.ok && body && body.success === true) return { ok: true, raw };
+    const msg = (body && (body.message || body.error_code)) || `HTTP ${res.status}`;
+    const code = body && body.response_code ? ` (কোড ${body.response_code})` : '';
+    const fatal =
+      res.status === 401 ||
+      res.status === 403 ||
+      /balance|insufficient|credential|client|secret|unauthori|sender|invalid.?key|expired|inactive|suspend/i.test(String(msg));
+    return { ok: false, error: `Softcents: ${msg}${code}`, raw, fatal };
+  },
+  async balance(site) {
+    const qs = new URLSearchParams({ clientId: site.sms_client_id, clientSecret: site.sms_client_secret });
+    const res = await fetch(`${this.baseUrl()}/check-balance?${qs}`, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(30000),
+    });
+    const { text, body } = await readJson(res);
+    if (!body) return { ok: false, error: `Softcents: অপ্রত্যাশিত উত্তর (HTTP ${res.status})` };
+    if (body.success === false) return { ok: false, error: `Softcents: ${body.message || `HTTP ${res.status}`}` };
+    const bal = body.balance ?? body.data?.balance;
+    const cur = body.currency ?? body.data?.currency ?? '';
+    return { ok: true, text: bal !== undefined ? `${bal} ${cur}`.trim() : text.slice(0, 200) };
+  },
+};
+
+// ---------- BulkSMSBD (bulksmsbd.net) — সফল হলে response_code 202 ----------
+const BULKSMSBD_ERRORS = {
+  1001: 'নাম্বার সঠিক নয়',
+  1002: 'Sender ID ভুল বা বন্ধ',
+  1003: 'প্রয়োজনীয় তথ্য নেই',
+  1005: 'BulkSMSBD-এর ভেতরের ত্রুটি',
+  1006: 'ব্যালেন্সের মেয়াদ নেই',
+  1007: 'ব্যালেন্স শেষ',
+  1011: 'ইউজার পাওয়া যায়নি — API Key ভুল',
+  1012: 'মাস্কিং SMS বাংলায় পাঠাতে হবে',
+  1032: 'সার্ভারের IP হোয়াইটলিস্টে নেই — BulkSMSBD প্যানেলে IP হোয়াইটলিস্ট বন্ধ করুন বা VPS-এর IP যোগ করুন',
+};
+const BULKSMSBD_FATAL = new Set([1002, 1003, 1005, 1006, 1007, 1011, 1032]);
+
+const bulksmsbd = {
+  label: 'BulkSMSBD',
+  missing(site) {
+    if (!site.sms_api_key) return 'BulkSMSBD API Key সেটিংসে দেওয়া নেই';
+    if (!site.sms_sender_id) return 'Sender ID সেটিংসে দেওয়া নেই';
+    return null;
+  },
+  async send(site, number, message) {
+    const qs = new URLSearchParams({
+      api_key: site.sms_api_key,
+      type: 'text',
+      number: '88' + localNumber(number),
+      senderid: site.sms_sender_id,
+      message,
+    });
+    const res = await fetch(`${process.env.SMS_API_URL || 'https://bulksmsbd.net/api/smsapi'}?${qs}`, {
+      signal: AbortSignal.timeout(30000),
+    });
+    const { text, body } = await readJson(res);
+    const raw = text.slice(0, 500);
+    const code = body ? Number(body.response_code) : NaN;
+    if (code === 202) return { ok: true, raw };
+    const why = BULKSMSBD_ERRORS[code] || (body && (body.error_message || body.success_message)) || `HTTP ${res.status}`;
+    return {
+      ok: false,
+      error: `BulkSMSBD: ${why}${Number.isFinite(code) ? ` (কোড ${code})` : ''}`,
+      raw,
+      fatal: BULKSMSBD_FATAL.has(code),
+    };
+  },
+  async balance(site) {
+    const res = await fetch(
+      `${(process.env.SMS_API_URL || 'https://bulksmsbd.net/api/smsapi').replace(/smsapi$/, 'getBalanceApi')}?api_key=${encodeURIComponent(site.sms_api_key)}`,
+      { signal: AbortSignal.timeout(30000) }
+    );
+    const { text, body } = await readJson(res);
+    if (body && body.balance !== undefined) return { ok: true, text: `${body.balance} টাকা` };
+    return { ok: false, error: `BulkSMSBD: ${BULKSMSBD_ERRORS[body?.response_code] || text.slice(0, 200)}` };
+  },
+};
+
+const PROVIDERS = { softcents, bulksmsbd };
+
+function providerOf(site) {
+  return PROVIDERS[site.sms_provider] || softcents;
+}
+
+// সেটিংসে কিছু বাকি থাকলে তার বিবরণ, নইলে null
+function missingConfig(site) {
+  return providerOf(site).missing(site);
+}
+
+async function send(site, number, message) {
+  const p = providerOf(site);
+  const missing = p.missing(site);
+  if (missing) return { ok: false, error: missing, raw: '', fatal: true };
+  try {
+    return await p.send(site, number, message);
+  } catch (e) {
+    return { ok: false, error: `${p.label}-এর সার্ভারে পৌঁছানো যায়নি: ${e.cause?.code || e.message}`, raw: '', fatal: true };
+  }
+}
+
+async function balance(site) {
+  const p = providerOf(site);
+  const missing = p.missing(site);
+  if (missing) return { ok: false, error: missing };
+  try {
+    return await p.balance(site);
+  } catch (e) {
+    return { ok: false, error: `${p.label}-এর সার্ভারে পৌঁছানো যায়নি: ${e.cause?.code || e.message}` };
+  }
+}
+
+module.exports = { send, balance, render, isMobile, localNumber, missingConfig, providerOf };

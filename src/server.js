@@ -150,7 +150,8 @@ ${engine.pollStatus(s.id).running ? '<div class="help" style="color:var(--amber)
     const recent = db.prepare('SELECT * FROM sms_log WHERE site_id = ? ORDER BY id DESC LIMIT 10').all(s.id);
     const missing = [];
     if (!s.mconnex_login || !s.mconnex_password) missing.push('mConnex লগইন');
-    if (!s.sms_api_key || !s.sms_sender_id) missing.push('BulkSMSBD API Key/Sender ID');
+    const smsMissing = sms.missingConfig(s);
+    if (smsMissing) missing.push(smsMissing);
     if (!st.activeAgents) missing.push('অন্তত একজন সক্রিয় এজেন্ট');
     if (!s.hotlines) missing.push('হটলাইন নাম্বার (না দিলে সব নাম্বারের মিসড কল ধরবে)');
     const body = `${siteTabs(s, '')}
@@ -166,8 +167,9 @@ ${s.dry_run && s.enabled ? '<div class="warn">টেস্ট মোড চা�
 <div class="card"><h2>অবস্থা</h2>${pollingNote(s.id)}<p>শেষ চেক: <b>${esc(s.last_poll_at || 'এখনো হয়নি')}</b><br><span class="muted">${esc(s.last_poll_status || '')}</span></p>
 <div class="row"><form method="post" action="/sites/${s.id}/poll"><button class="btn">এখনই কল চেক করুন</button></form>
 <form method="post" action="/sites/${s.id}/test-login"><button class="btn ghost">mConnex লগইন টেস্ট</button></form></div></div>
-<div class="card"><h2>টেস্ট SMS পাঠান</h2><p class="help">এটা টেস্ট মোড চালু থাকলেও আসল SMS পাঠায় — নিজের নাম্বার দিয়ে দেখুন লেখাটা কেমন যায়।</p>
-<form method="post" action="/sites/${s.id}/test-sms" class="row"><input type="text" name="number" placeholder="01XXXXXXXXX" style="max-width:220px" required><button class="btn ghost">পাঠান</button></form></div>
+<div class="card"><h2>টেস্ট SMS পাঠান</h2><p class="help">SMS কোম্পানি: <b>${esc(sms.providerOf(s).label)}</b>। এটা টেস্ট মোড চালু থাকলেও আসল SMS পাঠায় — নিজের নাম্বার দিয়ে দেখুন লেখাটা কেমন যায়।</p>
+<div class="row"><form method="post" action="/sites/${s.id}/test-sms" class="row"><input type="text" name="number" placeholder="01XXXXXXXXX" style="max-width:220px" required><button class="btn ghost">পাঠান</button></form>
+<form method="post" action="/sites/${s.id}/sms-balance"><button class="btn ghost">SMS ব্যালেন্স দেখুন</button></form></div></div>
 <div class="card"><h2>সাম্প্রতিক SMS</h2>${smsTable(recent)}<p><a href="/sites/${s.id}/sms">সব দেখুন →</a></p></div>`;
     render(req, res, s.name, body);
   });
@@ -208,6 +210,12 @@ ${actions ? `<td>${r.status === 'failed' ? `<form method="post" action="/sites/$
     } catch (e) {
       flash(req, 'err', e.message);
     }
+    back(req, res);
+  });
+
+  app.post('/sites/:id/sms-balance', loadSite, async (req, res) => {
+    const r = await sms.balance(req.site);
+    flash(req, r.ok ? 'ok' : 'err', r.ok ? `${sms.providerOf(req.site).label} ব্যালেন্স: ${r.text}` : `ব্যালেন্স দেখা যায়নি: ${r.error}`);
     back(req, res);
   });
 
@@ -475,7 +483,8 @@ ${rows.map((e) => `<tr><td class="nowrap">${esc(e.created_at)}</td><td>${e.level
       ['mConnex', ['mconnex_login', 'mconnex_password', 'hotlines']],
       ['কল চেক', ['poll_minutes', 'lookback_minutes', 'page_limit', 'request_timeout_minutes']],
       ['SMS-এর নিয়ম', ['sms_delay_minutes', 'skip_if_answered', 'cooldown_days', 'quiet_start', 'quiet_end', 'mobile_only', 'max_sms_per_run']],
-      ['SMS-এর লেখা ও BulkSMSBD', ['sms_template', 'sms_api_key', 'sms_sender_id']],
+      ['SMS কোম্পানি', ['sms_provider', 'sms_sender_id', 'sms_client_id', 'sms_client_secret', 'sms_api_key']],
+      ['SMS-এর লেখা', ['sms_template']],
     ];
     const byKey = Object.fromEntries(dbm.SITE_SETTINGS.map((x) => [x.key, x]));
     const body = `${siteTabs(s, '/settings')}<form method="post" action="/sites/${s.id}/settings">
@@ -505,6 +514,8 @@ ${groups.map(([title, keys]) => `<div class="card"><h2>${title}</h2><div class="
           continue;
         }
         v = n;
+      } else if (s.type === 'select') {
+        if (!s.options.some(([o]) => o === v)) continue;
       } else if (s.type === 'time') {
         if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(v)) {
           errors.push(`${s.label}: সময় ঠিক নেই`);
