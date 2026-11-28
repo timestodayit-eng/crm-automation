@@ -42,6 +42,11 @@ async function main() {
         req.delayed = true;
         return setTimeout(() => req.emit('end'), mock.delay); // ধীর mConnex-এর নকল
       }
+      if (url.pathname === '/api/v1/company/user-report' && mock.down) {
+        res.statusCode = 504;
+        res.setHeader('Content-Type', 'text/html');
+        return res.end('<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN"><html><head><title>504 Gateway Timeout</title></head><body><h1>Gateway Timeout</h1></body></html>');
+      }
       if (url.pathname === '/api/v1/company/user-report') {
         mock.reportCalls++;
         if (req.headers.authorization !== `Bearer ${mock.validToken}`) {
@@ -187,10 +192,26 @@ async function main() {
   ok(/৪১|41টি পুরনো মিসড কল বাদ/.test(db.prepare('SELECT last_poll_status FROM sites WHERE id = ?').get(siteId).last_poll_status), 'অবস্থায় "পুরনো মিসড কল বাদ" দেখাচ্ছে');
   db.prepare('UPDATE sites SET lookback_minutes = 60, page_limit = 10 WHERE id = ?').run(siteId);
 
+  console.log('\n২খ. mConnex বন্ধ থাকলে পরে ফিরে এসে সেই সময়ের কল ধরে');
+  await engine.runSite(siteId, { force: true }); // সফল চেক — last_ok_end এখন
+  // ধরি প্রথম সিঙ্ক অনেক আগে, আর শেষ সফল চেক ১০০ মিনিট আগে
+  db.prepare('UPDATE sites SET last_ok_end = ?, baseline_at = ? WHERE id = ?').run(time.minutesAgo(100), time.minutesAgo(600), siteId);
+  mock.down = true;
+  await engine.runSite(siteId, { force: true });
+  const downSt = db.prepare('SELECT last_poll_status FROM sites WHERE id = ?').get(siteId).last_poll_status;
+  ok(/সাময়িকভাবে উত্তর দিচ্ছে না \(HTTP 504\)/.test(downSt) && !/DOCTYPE/.test(downSt), 'mConnex 504 দিলে HTML ছাড়া পরিষ্কার বাংলা ত্রুটি দেখায়');
+  mock.rows.push(call('01760000001', 'MISSED CALL', 90)); // বন্ধ থাকার সময়ের কল, পিছনে দেখার ৬০ মিনিটের বাইরে
+  mock.down = false;
+  before2 = smsSent.length;
+  await engine.runSite(siteId, { force: true });
+  ok(!!lastSms('01760000001'), 'mConnex ফিরে এলে বন্ধ থাকার সময়ের (৯০ মিনিট আগের) মিসড কলেও SMS গেছে');
+  ok(db.prepare('SELECT last_ok_end FROM sites WHERE id = ?').get(siteId).last_ok_end > time.minutesAgo(1), 'শেষ সফল চেকের সময় আপডেট হয়েছে');
+
   console.log('\n৩. কুলডাউন — ৭ দিনের মধ্যে আবার SMS যাবে না');
+  const beforeCool = smsSent.length;
   mock.rows.push(call('01810000002'));
   await engine.runSite(siteId, { force: true });
-  ok(smsSent.length === 4, 'আবার মিসড কল দিলেও কুলডাউনের মধ্যে নতুন SMS যায়নি');
+  ok(smsSent.length === beforeCool, 'আবার মিসড কল দিলেও কুলডাউনের মধ্যে নতুন SMS যায়নি');
   ok(agentOf('01810000002') === B, 'কলারের এজেন্ট আগের মতোই B আছে');
 
   console.log('\n৪. এজেন্ট বন্ধ করলে কলার নতুন এজেন্ট পান, নইলে সবসময় একই এজেন্ট');

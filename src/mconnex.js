@@ -40,7 +40,11 @@ async function request(url, options = {}, step = 'mConnex', site = null) {
     if (e.name === 'TimeoutError' || e.name === 'AbortError') {
       throw new Error(`${step}: ${describe(limit)} mConnex উত্তর দেয়নি — সেটিংসে "mConnex-এর উত্তরের জন্য সর্বোচ্চ অপেক্ষা" বাড়িয়ে দেখুন`);
     }
-    throw new Error(`${step}: mConnex-এ পৌঁছানো যায়নি (${e.cause?.code || e.message})`);
+    const code = e.cause?.code || e.code || e.message;
+    if (/CONNECT_TIMEOUT|ETIMEDOUT|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN/.test(code)) {
+      throw new Error(`${step}: mConnex-এর সার্ভারে এখন ঢোকা যাচ্ছে না (${code}) — কয়েক মিনিট পরে নিজে আবার চেষ্টা করবে`);
+    }
+    throw new Error(`${step}: mConnex-এ পৌঁছানো যায়নি (${code})`);
   }
   let body;
   try {
@@ -49,7 +53,13 @@ async function request(url, options = {}, step = 'mConnex', site = null) {
     body = null;
   }
   if (res.status === 401 || res.status === 403) throw new AuthError(`mConnex ${res.status}`);
-  if (!res.ok) throw new Error(`mConnex HTTP ${res.status}: ${text.slice(0, 200)}`);
+  if (!res.ok) {
+    if ([502, 503, 504].includes(res.status)) {
+      throw new Error(`${step}: mConnex-এর সার্ভার সাময়িকভাবে উত্তর দিচ্ছে না (HTTP ${res.status}) — কয়েক মিনিট পরে নিজে আবার চেষ্টা করবে`);
+    }
+    const plain = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`${step}: mConnex HTTP ${res.status}${plain ? ` — ${plain}` : ''}`);
+  }
   if (!body) throw new Error(`mConnex অপ্রত্যাশিত উত্তর: ${text.slice(0, 200)}`);
   return body;
 }

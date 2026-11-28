@@ -66,6 +66,7 @@ function init(dbPath) {
       rr_last_agent_id INTEGER,
       baseline_done INTEGER NOT NULL DEFAULT 0,
       baseline_at TEXT,
+      last_ok_end TEXT,
       last_poll_at TEXT,
       last_poll_status TEXT,
       created_at TEXT NOT NULL
@@ -139,6 +140,7 @@ function init(dbPath) {
     db.exec(`ALTER TABLE sites ADD COLUMN ${s.key} ${type} NOT NULL DEFAULT ${def}`);
   }
   if (!existing.has('baseline_at')) db.exec('ALTER TABLE sites ADD COLUMN baseline_at TEXT');
+  if (!existing.has('last_ok_end')) db.exec('ALTER TABLE sites ADD COLUMN last_ok_end TEXT');
   // আগে থেকে চলা সাইটে প্রথম সিঙ্কের সময় জানা নেই — এই আপডেটের সময় থেকেই গোনা শুরু
   db.prepare('UPDATE sites SET baseline_at = ? WHERE baseline_done = 1 AND baseline_at IS NULL').run(time.now());
   return db;

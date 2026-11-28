@@ -144,8 +144,15 @@ async function pollSite(siteId) {
   if (!site) return;
   const d = db();
   const endDate = time.now();
-  const startDate = time.minutesAgo(Number(site.lookback_minutes) || 180);
+  // সাধারণত শেষ "পিছনে দেখার সময়" টুকু; কিন্তু mConnex কিছুক্ষণ বন্ধ থাকলে শেষ সফল চেকের সময় থেকে
+  // (সর্বোচ্চ ১২ ঘণ্টা পিছনে) টানে, যাতে বন্ধ থাকার সময়ের কোনো কল বাদ না পড়ে
+  let startDate = time.minutesAgo(Number(site.lookback_minutes) || 60);
+  if (site.last_ok_end) {
+    const catchUp = time.addMinutes(site.last_ok_end, -10);
+    if (catchUp < startDate) startDate = catchUp > time.minutesAgo(12 * 60) ? catchUp : time.minutesAgo(12 * 60);
+  }
   const rows = await mconnex.fetchCalls(site, startDate, endDate);
+  d.prepare('UPDATE sites SET last_ok_end = ? WHERE id = ?').run(endDate, site.id);
 
   const insert = d.prepare(
     `INSERT OR IGNORE INTO calls (site_id, linked_id, call_date, caller, called, status, answered_duration, total_duration, created_at)
