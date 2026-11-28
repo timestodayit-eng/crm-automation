@@ -430,6 +430,25 @@ async function main() {
   ok(/<option value="softcents" selected>/.test(settingsHtml), 'সেটিংসে SMS কোম্পানি বাছাইয়ের ঘরে Softcents বেছে রাখা আছে');
   await req(`/sites/${siteId}/settings`, new URLSearchParams([['sms_provider', 'hacked'], ['sms_client_secret', '']]));
   ok(db.prepare('SELECT sms_provider, sms_client_secret FROM sites WHERE id = ?').get(siteId).sms_provider === 'softcents', 'তালিকার বাইরের কোম্পানি সেভ হয় না');
+  // SMS API ঠিকানা প্যানেল থেকে
+  ok(/name="sms_api_url"/.test(settingsHtml), 'সেটিংসে "SMS API ঠিকানা" ঘর আছে');
+  await req(`/sites/${siteId}/settings`, { sms_api_url: 'javascript:alert(1)' });
+  ok(db.prepare('SELECT sms_api_url u FROM sites WHERE id = ?').get(siteId).u === '', 'ভুল ঠিকানা সেভ হয় না');
+  const softUrl = process.env.SOFTCENTS_API_URL;
+  process.env.SOFTCENTS_API_URL = 'http://127.0.0.1:9/nowhere'; // .env-এর ঠিকানা অকেজো — প্যানেলের ঠিকানাই চলা উচিত
+  await req(`/sites/${siteId}/settings`, { sms_api_url: `${softUrl}/send-sms/` });
+  const withUrl = db.prepare('SELECT * FROM sites WHERE id = ?').get(siteId);
+  ok(withUrl.sms_api_url === `${softUrl}/send-sms/`, 'সঠিক ঠিকানা সেভ হয়');
+  const softN = softSent.length;
+  const viaPanel = await smsMod.send(withUrl, '01810000040', 'panel url');
+  ok(viaPanel.ok && softSent.length === softN + 1, 'প্যানেলে দেওয়া ঠিকানায় Softcents SMS গেছে (.env-এর ঠিকানা বাদ দিয়ে)');
+  ok((await smsMod.balance(withUrl)).ok, 'প্যানেলে দেওয়া ঠিকানায় ব্যালেন্সও দেখা যায়');
+  const bulkN = smsSent.length;
+  const viaBulk = await smsMod.send({ ...withUrl, sms_provider: 'bulksmsbd', sms_api_key: 'KEY', sms_api_url: `http://127.0.0.1:${smsSrv.address().port}/api/smsapi` }, '01810000041', 'panel url');
+  ok(viaBulk.ok && smsSent.length === bulkN + 1, 'প্যানেলে দেওয়া ঠিকানায় BulkSMSBD SMS গেছে');
+  await req(`/sites/${siteId}/settings`, { sms_api_url: '' });
+  process.env.SOFTCENTS_API_URL = softUrl;
+  ok(db.prepare('SELECT sms_api_url u FROM sites WHERE id = ?').get(siteId).u === '', 'ঘর খালি করলে আবার সাধারণ ঠিকানায় ফেরে');
   const balRes = await req(`/sites/${siteId}/sms-balance`, { x: '1' });
   const afterBal = await (await req(balRes.headers.get('location'))).text();
   ok(afterBal.includes('1250.5 BDT'), 'প্যানেলের "SMS ব্যালেন্স দেখুন" বোতাম কাজ করছে');

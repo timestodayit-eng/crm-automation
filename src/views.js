@@ -119,6 +119,9 @@ function settingField(s, value) {
   if (s.type === 'secret') {
     return `<label class="f"><span>${esc(s.label)}</span><input type="password" ${name} autocomplete="new-password" placeholder="${value ? '•••••••• (রাখা আছে — বদলাতে নতুনটা লিখুন)' : 'দেওয়া নেই'}">${help}</label>`;
   }
+  if (s.type === 'url') {
+    return `<label class="f" style="grid-column:1/-1"><span>${esc(s.label)}</span><input type="text" ${name} value="${esc(value)}" placeholder="খালি = সাধারণ ঠিকানা" inputmode="url" autocomplete="off">${help}</label>`;
+  }
   const type = s.type === 'int' ? 'number' : s.type === 'time' ? 'time' : 'text';
   const extra = s.type === 'int' ? `min="${s.min}" max="${s.max}"` : '';
   return `<label class="f"><span>${esc(s.label)}</span><input type="${type}" ${name} value="${esc(value)}" ${extra}>${help}</label>`;

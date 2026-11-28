@@ -58,8 +58,10 @@ const SOFTCENTS_RETRY = new Set([1008]); // সাময়িক — ব্য�
 
 const softcents = {
   label: 'Softcents',
-  baseUrl() {
-    return (process.env.SOFTCENTS_API_URL || 'https://sms.softcents.com/api/v1').replace(/\/+$/, '');
+  baseUrl(site) {
+    return ((site && site.sms_api_url) || process.env.SOFTCENTS_API_URL || 'https://sms.softcents.com/api/v1')
+      .replace(/\/+$/, '')
+      .replace(/\/send-sms$/, ''); // পুরো send-sms ঠিকানা পেস্ট করলেও চলবে
   },
   missing(site) {
     if (!site.sms_client_id || !site.sms_client_secret) return 'Softcents Client ID বা Client Secret সেটিংসে দেওয়া নেই';
@@ -74,7 +76,7 @@ const softcents = {
       numbers: '88' + localNumber(number),
       contents: message,
     };
-    let res = await fetch(`${this.baseUrl()}/send-sms`, {
+    let res = await fetch(`${this.baseUrl(site)}/send-sms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(params),
@@ -83,7 +85,7 @@ const softcents = {
     // POST-এর ঠিকানা না পেলে (404/405) ওদের ডকুমেন্টের "Direct GET URL" পদ্ধতিতে একবার চেষ্টা
     if (res.status === 404 || res.status === 405) {
       await res.text().catch(() => {});
-      res = await fetch(`${this.baseUrl()}/send-sms?${new URLSearchParams(params)}`, {
+      res = await fetch(`${this.baseUrl(site)}/send-sms?${new URLSearchParams(params)}`, {
         headers: { Accept: 'application/json' },
         signal: AbortSignal.timeout(30000),
       });
@@ -107,7 +109,7 @@ const softcents = {
   },
   async balance(site) {
     const qs = new URLSearchParams({ clientId: site.sms_client_id, clientSecret: site.sms_client_secret });
-    const res = await fetch(`${this.baseUrl()}/check-balance?${qs}`, {
+    const res = await fetch(`${this.baseUrl(site)}/check-balance?${qs}`, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(30000),
     });
@@ -136,6 +138,9 @@ const BULKSMSBD_FATAL = new Set([1002, 1003, 1005, 1006, 1007, 1011, 1032]);
 
 const bulksmsbd = {
   label: 'BulkSMSBD',
+  sendUrl(site) {
+    return ((site && site.sms_api_url) || process.env.SMS_API_URL || 'https://bulksmsbd.net/api/smsapi').replace(/[/?]+$/, '');
+  },
   missing(site) {
     if (!site.sms_api_key) return 'BulkSMSBD API Key সেটিংসে দেওয়া নেই';
     if (!site.sms_sender_id) return 'Sender ID সেটিংসে দেওয়া নেই';
@@ -149,7 +154,7 @@ const bulksmsbd = {
       senderid: site.sms_sender_id,
       message,
     });
-    const res = await fetch(`${process.env.SMS_API_URL || 'https://bulksmsbd.net/api/smsapi'}?${qs}`, {
+    const res = await fetch(`${this.sendUrl(site)}?${qs}`, {
       signal: AbortSignal.timeout(30000),
     });
     const { text, body } = await readJson(res);
@@ -166,7 +171,7 @@ const bulksmsbd = {
   },
   async balance(site) {
     const res = await fetch(
-      `${(process.env.SMS_API_URL || 'https://bulksmsbd.net/api/smsapi').replace(/smsapi$/, 'getBalanceApi')}?api_key=${encodeURIComponent(site.sms_api_key)}`,
+      `${this.sendUrl(site).replace(/smsapi$/, 'getBalanceApi')}?api_key=${encodeURIComponent(site.sms_api_key)}`,
       { signal: AbortSignal.timeout(30000) }
     );
     const { text, body } = await readJson(res);
