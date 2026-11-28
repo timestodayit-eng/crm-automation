@@ -164,7 +164,8 @@ ${s.dry_run && s.enabled ? '<div class="warn">টেস্ট মোড চা�
 <div class="stat"><b>${st.queued}</b><small>লাইনে আছে</small></div>
 <div class="stat"><b>${st.failedToday}</b><small>আজ ব্যর্থ</small></div>
 <div class="stat"><b>${st.callers}</b><small>মোট কলার</small></div></div>
-<div class="card"><h2>অবস্থা</h2>${pollingNote(s.id)}<p>শেষ চেক: <b>${esc(s.last_poll_at || 'এখনো হয়নি')}</b><br><span class="muted">${esc(s.last_poll_status || '')}</span></p>
+<div class="card"><h2>অবস্থা</h2>${pollingNote(s.id)}<p>শেষ চেক: <b>${esc(s.last_poll_at || 'এখনো হয়নি')}</b><br><span class="muted">${esc(s.last_poll_status || '')}</span>
+${s.enabled && s.next_poll_at ? `<br><span class="muted">পরের চেক: ${esc(s.next_poll_at.slice(11, 16))}-এর পরে${s.next_sweep_at ? ` · পরের নিরাপত্তা চেক: ${esc(s.next_sweep_at.slice(11, 16))}-এর পরে` : ''}</span>` : ''}</p>
 <div class="row"><form method="post" action="/sites/${s.id}/poll"><button class="btn">এখনই কল চেক করুন</button></form>
 <form method="post" action="/sites/${s.id}/test-login"><button class="btn ghost">mConnex লগইন টেস্ট</button></form></div></div>
 <div class="card"><h2>টেস্ট SMS পাঠান</h2><p class="help">SMS কোম্পানি: <b>${esc(sms.providerOf(s).label)}</b>। এটা টেস্ট মোড চালু থাকলেও আসল SMS পাঠায় — নিজের নাম্বার দিয়ে দেখুন লেখাটা কেমন যায়।</p>
@@ -481,7 +482,7 @@ ${rows.map((e) => `<tr><td class="nowrap">${esc(e.created_at)}</td><td>${e.level
     const groups = [
       ['সাধারণ', ['name', 'enabled', 'dry_run']],
       ['mConnex', ['mconnex_login', 'mconnex_password', 'hotlines']],
-      ['কল চেক', ['poll_minutes', 'lookback_minutes', 'page_limit', 'request_timeout_minutes']],
+      ['কল চেক', ['poll_min_minutes', 'poll_max_minutes', 'overlap_min_minutes', 'overlap_max_minutes', 'sweep_minutes', 'lookback_minutes', 'page_limit', 'request_timeout_minutes']],
       ['SMS-এর নিয়ম', ['max_missed_age_minutes', 'sms_delay_minutes', 'skip_if_answered', 'cooldown_days', 'quiet_start', 'quiet_end', 'mobile_only', 'max_sms_per_run']],
       ['SMS কোম্পানি', ['sms_provider', 'sms_sender_id', 'sms_client_id', 'sms_client_secret', 'sms_api_key']],
       ['SMS-এর লেখা', ['sms_template']],

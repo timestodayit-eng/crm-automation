@@ -14,8 +14,12 @@ const SITE_SETTINGS = [
   { key: 'mconnex_login', label: 'mConnex লগইন নাম', type: 'text', def: '' },
   { key: 'mconnex_password', label: 'mConnex পাসওয়ার্ড', type: 'secret', def: '' },
   { key: 'hotlines', label: 'যে হটলাইনের মিসড কল ধরা হবে', type: 'text', def: '', help: 'কমা দিয়ে একাধিক দেওয়া যায়। খালি রাখলে সব নাম্বারের মিসড কল ধরা হবে' },
-  { key: 'poll_minutes', label: 'কত মিনিট পর পর কল চেক করবে', type: 'int', def: 5, min: 1, max: 120 },
-  { key: 'lookback_minutes', label: 'প্রতিবার কত মিনিট পিছনের কল দেখবে', type: 'int', def: 60, min: 30, max: 1440, help: 'অন্তত ৬০ রাখুন। mConnex ধীর আর কল রিপোর্টে উঠতে দেরি হয়, তাই ছোট রাখলে কল বাদ পড়ে। একই কল দুবার ধরা হয় না, তাই বড় রাখায় ক্ষতি নেই' },
+  { key: 'poll_min_minutes', label: 'কল চেকের বিরতি — সর্বনিম্ন (মিনিট)', type: 'int', def: 5, min: 1, max: 120 },
+  { key: 'poll_max_minutes', label: 'কল চেকের বিরতি — সর্বোচ্চ (মিনিট)', type: 'int', def: 10, min: 1, max: 120, help: 'প্রতিবার এই দুইয়ের মাঝের একটা এলোমেলো সময় (সেকেন্ডসহ) পরে চেক হবে, যাতে কোনো নির্দিষ্ট ছন্দ না থাকে' },
+  { key: 'overlap_min_minutes', label: 'আগের চেকের সাথে ওভারল্যাপ — সর্বনিম্ন (মিনিট)', type: 'int', def: 2, min: 0, max: 60 },
+  { key: 'overlap_max_minutes', label: 'আগের চেকের সাথে ওভারল্যাপ — সর্বোচ্চ (মিনিট)', type: 'int', def: 5, min: 0, max: 60, help: 'প্রতিবার আগের চেক যেখানে শেষ হয়েছিল, তার এলোমেলো কয়েক মিনিট আগে থেকে টানবে — যেমন ৬ মিনিট পরে চেক হলে ৮–১১ মিনিট পিছনের কল। একই কল দুবার ধরা হয় না' },
+  { key: 'sweep_minutes', label: 'নিরাপত্তা চেক — প্রায় কত মিনিটে একবার', type: 'int', def: 60, min: 15, max: 720, help: 'এই সময়ের আশেপাশে (±২৫%, এলোমেলো) একবার পুরো "পিছনে দেখার সময়" টেনে দেখবে, যাতে mConnex-এ দেরিতে ওঠা কলও বাদ না পড়ে' },
+  { key: 'lookback_minutes', label: 'নিরাপত্তা চেকে কত মিনিট পিছনের কল দেখবে', type: 'int', def: 60, min: 30, max: 1440, help: 'অন্তত ৬০ রাখুন। প্রথমবার আর প্রতিটা নিরাপত্তা চেকে এতটা পিছনে দেখে' },
   { key: 'page_limit', label: 'প্রতি পেজে কতটা কল আনবে', type: 'int', def: 100, min: 10, max: 500, help: '১০০ রাখুন — এক ঘণ্টার সব কল সাধারণত এক পেজেই চলে আসে। খুব বড় সংখ্যা দিলে mConnex ঠিকমতো উত্তর নাও দিতে পারে' },
   { key: 'request_timeout_minutes', label: 'mConnex-এর উত্তরের জন্য সর্বোচ্চ অপেক্ষা (মিনিট)', type: 'int', def: 10, min: 1, max: 30, help: 'এর মধ্যে উত্তর না এলে এবারের চেক বাদ দিয়ে পরের বার আবার চেষ্টা করবে' },
   { key: 'max_missed_age_minutes', label: 'কত মিনিটের পুরনো মিসড কল পর্যন্ত SMS যাবে', type: 'int', def: 120, min: 10, max: 1440, help: 'এর চেয়ে পুরনো মিসড কল শুধু রেকর্ড হবে, SMS যাবে না — পিছনে দেখার সময় বাড়ালে বা সার্ভার বন্ধ থাকার পরে একসাথে পুরনো কলারদের SMS যাওয়া ঠেকায়' },
@@ -67,6 +71,8 @@ function init(dbPath) {
       baseline_done INTEGER NOT NULL DEFAULT 0,
       baseline_at TEXT,
       last_ok_end TEXT,
+      next_poll_at TEXT,
+      next_sweep_at TEXT,
       last_poll_at TEXT,
       last_poll_status TEXT,
       created_at TEXT NOT NULL
@@ -140,7 +146,9 @@ function init(dbPath) {
     db.exec(`ALTER TABLE sites ADD COLUMN ${s.key} ${type} NOT NULL DEFAULT ${def}`);
   }
   if (!existing.has('baseline_at')) db.exec('ALTER TABLE sites ADD COLUMN baseline_at TEXT');
-  if (!existing.has('last_ok_end')) db.exec('ALTER TABLE sites ADD COLUMN last_ok_end TEXT');
+  for (const col of ['last_ok_end', 'next_poll_at', 'next_sweep_at']) {
+    if (!existing.has(col)) db.exec(`ALTER TABLE sites ADD COLUMN ${col} TEXT`);
+  }
   // আগে থেকে চলা সাইটে প্রথম সিঙ্কের সময় জানা নেই — এই আপডেটের সময় থেকেই গোনা শুরু
   db.prepare('UPDATE sites SET baseline_at = ? WHERE baseline_done = 1 AND baseline_at IS NULL').run(time.now());
   return db;

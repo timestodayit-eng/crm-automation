@@ -138,22 +138,58 @@ function handleMissed(site, call, hotlines) {
   return 'queued';
 }
 
+// ---------- এলোমেলো সময় ----------
+// min থেকে max-এর মধ্যে যেকোনো দশমিক মিনিট (সেকেন্ডসহ), যাতে কোনো নির্দিষ্ট ছন্দ না থাকে
+function randomBetween(min, max) {
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  return lo + Math.random() * (hi - lo);
+}
+
+// কোন সময় থেকে কল টানবে:
+// - সাধারণ চেক: শেষ সফল চেকের শেষ থেকে এলোমেলো কয়েক মিনিট আগে থেকে (ওভারল্যাপ), যাতে মাঝখানে ফাঁক না থাকে
+// - নিরাপত্তা চেক (মাঝে মাঝে, এলোমেলো সময়ে): পুরো "পিছনে দেখার সময়", যাতে mConnex-এ দেরিতে ওঠা কলও ধরা পড়ে
+// - প্রথমবার বা mConnex অনেকক্ষণ বন্ধ থাকার পরে: শেষ সফল চেক থেকে (সর্বোচ্চ ১২ ঘণ্টা পিছনে)
+function pollWindow(site, endDate) {
+  const maxBack = time.addMinutes(endDate, -12 * 60);
+  const full = time.addMinutes(endDate, -Math.max(30, Number(site.lookback_minutes) || 60));
+  const sweep = !site.last_ok_end || !site.next_sweep_at || site.next_sweep_at <= endDate;
+  let startDate;
+  if (sweep) {
+    startDate = full;
+    if (site.last_ok_end) {
+      const catchUp = time.addMinutes(site.last_ok_end, -10);
+      if (catchUp < startDate) startDate = catchUp;
+    }
+  } else {
+    const overlap = randomBetween(Number(site.overlap_min_minutes) || 2, Number(site.overlap_max_minutes) || 5);
+    startDate = time.addMinutes(site.last_ok_end, -overlap);
+  }
+  if (startDate < maxBack) startDate = maxBack;
+  return { startDate, sweep };
+}
+
+function scheduleNextPoll(siteId) {
+  const site = getSite(siteId);
+  if (!site) return;
+  const mins = randomBetween(Math.max(1, Number(site.poll_min_minutes) || 5), Math.max(1, Number(site.poll_max_minutes) || 10));
+  db().prepare('UPDATE sites SET next_poll_at = ? WHERE id = ?').run(time.addMinutes(time.now(), mins), siteId);
+}
+
 // ---------- mConnex থেকে কল টানা ----------
 async function pollSite(siteId) {
   const site = getSite(siteId);
   if (!site) return;
   const d = db();
   const endDate = time.now();
-  // সাধারণত শেষ "পিছনে দেখার সময়" টুকু; কিন্তু mConnex কিছুক্ষণ বন্ধ থাকলে শেষ সফল চেকের সময় থেকে
-  // (সর্বোচ্চ ১২ ঘণ্টা পিছনে) টানে, যাতে বন্ধ থাকার সময়ের কোনো কল বাদ না পড়ে
-  // অন্তত ৩০ মিনিট — mConnex-এ কল দেরিতে ওঠে, ছোট সময় দিলে কল বাদ পড়ে
-  let startDate = time.minutesAgo(Math.max(30, Number(site.lookback_minutes) || 60));
-  if (site.last_ok_end) {
-    const catchUp = time.addMinutes(site.last_ok_end, -10);
-    if (catchUp < startDate) startDate = catchUp > time.minutesAgo(12 * 60) ? catchUp : time.minutesAgo(12 * 60);
-  }
+  const { startDate, sweep } = pollWindow(site, endDate);
   const rows = await mconnex.fetchCalls(site, startDate, endDate);
+  const windowMin = Math.round((time.parse(endDate) - time.parse(startDate)) / 60000);
   d.prepare('UPDATE sites SET last_ok_end = ? WHERE id = ?').run(endDate, site.id);
+  if (sweep) {
+    const every = Math.max(15, Number(site.sweep_minutes) || 60);
+    d.prepare('UPDATE sites SET next_sweep_at = ? WHERE id = ?').run(time.addMinutes(endDate, randomBetween(every * 0.75, every * 1.25)), site.id);
+  }
 
   const insert = d.prepare(
     `INSERT OR IGNORE INTO calls (site_id, linked_id, call_date, caller, called, status, answered_duration, total_duration, created_at)
@@ -208,7 +244,7 @@ async function pollSite(siteId) {
 
   d.prepare('UPDATE sites SET last_poll_at = ?, last_poll_status = ? WHERE id = ?').run(
     time.now(),
-    `ঠিক আছে — ${rows.length}টি কল দেখা, ${counts.new_calls}টি নতুন, ${counts.missed}টি নতুন মিসড কল, ${counts.queued}টি SMS লাইনে${
+    `ঠিক আছে — ${sweep ? 'নিরাপত্তা চেক, ' : ''}শেষ ${windowMin} মিনিটের ${rows.length}টি কল দেখা, ${counts.new_calls}টি নতুন, ${counts.missed}টি নতুন মিসড কল, ${counts.queued}টি SMS লাইনে${
       counts.old ? `, ${counts.old}টি পুরনো মিসড কল বাদ` : ''
     }`,
     site.id
@@ -306,9 +342,9 @@ async function processQueue(siteId) {
 // যাতে mConnex-এর অপেক্ষায় লাইনের SMS আটকে না থাকে।
 const polling = new Map(); // siteId → শুরুর সময় (ms)
 
+// পরের চেকের সময় প্রতিবার এলোমেলোভাবে ঠিক হয় (scheduleNextPoll)
 function pollDue(site) {
-  const lastPollMs = site.last_poll_at ? time.parse(site.last_poll_at) : 0;
-  return Date.now() - lastPollMs >= (Number(site.poll_minutes) || 5) * 60 * 1000;
+  return !site.next_poll_at || site.next_poll_at <= time.now();
 }
 
 // ব্যাকগ্রাউন্ডে কল টানা শুরু করে; আগে থেকে চলতে থাকলে আবার শুরু করে না
@@ -325,7 +361,10 @@ function startPoll(siteId) {
       dbm.logEvent(siteId, 'error', `কল টানতে সমস্যা: ${e.message}`);
       return null;
     })
-    .finally(() => polling.delete(siteId));
+    .finally(() => {
+      polling.delete(siteId);
+      scheduleNextPoll(siteId); // সফল হোক বা না হোক, পরের চেক এলোমেলো সময় পরে
+    });
   return { started: true, promise };
 }
 

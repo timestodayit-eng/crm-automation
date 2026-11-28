@@ -141,6 +141,8 @@ async function main() {
        VALUES ('Test Site', 1, 0, 'Test_User', 'secret', '01969918811', 0, '00:00', '00:00', 7, 'bulksmsbd', 'KEY', 'SENDER', 10, ?)`
     )
     .run(time.now()).lastInsertRowid;
+  // টেস্টে ওভারল্যাপ নির্দিষ্ট ৫ মিনিট (নকল কলগুলো ১–৩ মিনিট আগের তারিখে তৈরি হয়)
+  db.prepare('UPDATE sites SET overlap_min_minutes = 5, overlap_max_minutes = 5 WHERE id = ?').run(siteId);
   const addAgent = (name, number, order) =>
     db.prepare('INSERT INTO agents (site_id, name, number, sort_order, created_at) VALUES (?, ?, ?, ?, ?)').run(siteId, name, number, order, time.now()).lastInsertRowid;
   const A = addAgent('Agent A', '01711000001', 1);
@@ -181,7 +183,7 @@ async function main() {
   ok(!smsSent.some((s) => s.number.includes('01810000006')), 'অন্য হটলাইনের মিসড কলে SMS যায়নি');
 
   console.log('\n২ক. পিছনে দেখার সময় বাড়ালেও পুরনো মিসড কলে SMS নয়');
-  db.prepare('UPDATE sites SET lookback_minutes = 1440, page_limit = 100 WHERE id = ?').run(siteId);
+  db.prepare('UPDATE sites SET lookback_minutes = 1440, page_limit = 100, next_sweep_at = NULL WHERE id = ?').run(siteId); // নিরাপত্তা চেক জোর করে
   for (let i = 0; i < 40; i++) mock.rows.push(call(`0175000${String(i).padStart(4, '0')}`, 'MISSED CALL', 180 + i * 10)); // ৩–৯ ঘণ্টা আগের, আগে কখনো দেখা হয়নি
   mock.rows.push(call('01750009999', 'MISSED CALL', 70)); // প্রথম সিঙ্কের আগের (৭০ মিনিট আগে)
   let before2 = smsSent.length;
@@ -206,6 +208,33 @@ async function main() {
   await engine.runSite(siteId, { force: true });
   ok(!!lastSms('01760000001'), 'mConnex ফিরে এলে বন্ধ থাকার সময়ের (৯০ মিনিট আগের) মিসড কলেও SMS গেছে');
   ok(db.prepare('SELECT last_ok_end FROM sites WHERE id = ?').get(siteId).last_ok_end > time.minutesAgo(1), 'শেষ সফল চেকের সময় আপডেট হয়েছে');
+
+  console.log('\n২গ. এলোমেলো বিরতি, ওভারল্যাপ আর নিরাপত্তা চেক');
+  const engineMod = engine;
+  const gaps = [];
+  for (let i = 0; i < 25; i++) {
+    await engineMod.startPoll(siteId).promise;
+    const st = db.prepare('SELECT next_poll_at, last_ok_end FROM sites WHERE id = ?').get(siteId);
+    gaps.push((time.parse(st.next_poll_at) - Date.now()) / 60000);
+  }
+  ok(gaps.every((g) => g >= 4.9 && g <= 10.05), `পরের চেক সবসময় ৫–১০ মিনিটের মধ্যে (${Math.min(...gaps).toFixed(1)}–${Math.max(...gaps).toFixed(1)})`);
+  ok(new Set(gaps.map((g) => g.toFixed(2))).size > 15, 'প্রতিবার বিরতি আলাদা — কোনো নির্দিষ্ট ছন্দ নেই');
+  // সাধারণ চেকের জানালা = শেষ সফল চেকের শেষ − ওভারল্যাপ
+  db.prepare('UPDATE sites SET overlap_min_minutes = 2, overlap_max_minutes = 4, last_ok_end = ?, next_sweep_at = ? WHERE id = ?').run(time.minutesAgo(6), time.addMinutes(time.now(), 30), siteId);
+  await engineMod.startPoll(siteId).promise;
+  const mWin = /শেষ (\d+) মিনিটের/.exec(db.prepare('SELECT last_poll_status FROM sites WHERE id = ?').get(siteId).last_poll_status);
+  ok(mWin && Number(mWin[1]) >= 8 && Number(mWin[1]) <= 10, `৬ মিনিট পরের চেক ৮–১০ মিনিট পিছনের কল টেনেছে (${mWin && mWin[1]} মিনিট)`);
+  // দেরিতে ওঠা কল: সাধারণ চেকে বাদ পড়ে, নিরাপত্তা চেকে ধরা পড়ে
+  mock.rows.push(call('01770000001', 'MISSED CALL', 25));
+  await engineMod.startPoll(siteId).promise;
+  ok(!db.prepare("SELECT 1 FROM calls WHERE caller = '01770000001'").get(), 'mConnex-এ দেরিতে ওঠা ২৫ মিনিট আগের কল সাধারণ চেকে আসেনি');
+  db.prepare('UPDATE sites SET next_sweep_at = ? WHERE id = ?').run(time.minutesAgo(1), siteId);
+  await engineMod.runSite(siteId, { force: true });
+  ok(!!db.prepare("SELECT 1 FROM calls WHERE caller = '01770000001'").get() && !!lastSms('01770000001'), 'নিরাপত্তা চেকে সেই কল ধরা পড়েছে আর SMS গেছে');
+  const nextSweep = db.prepare('SELECT next_sweep_at FROM sites WHERE id = ?').get(siteId).next_sweep_at;
+  const sweepIn = (time.parse(nextSweep) - Date.now()) / 60000;
+  ok(sweepIn >= 44 && sweepIn <= 76, `পরের নিরাপত্তা চেক ৪৫–৭৫ মিনিটের মধ্যে (${sweepIn.toFixed(0)} মিনিট)`);
+  db.prepare('UPDATE sites SET overlap_min_minutes = 5, overlap_max_minutes = 5 WHERE id = ?').run(siteId);
 
   console.log('\n৩. কুলডাউন — ৭ দিনের মধ্যে আবার SMS যাবে না');
   const beforeCool = smsSent.length;
