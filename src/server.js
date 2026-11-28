@@ -9,7 +9,7 @@ const engine = require('./engine');
 const mconnex = require('./mconnex');
 const sms = require('./sms');
 const time = require('./time');
-const { esc, layout, siteTabs, statusPill, settingField } = require('./views');
+const { esc, icon, stat, siteState, initials, layout, siteTabs, statusPill, settingField } = require('./views');
 
 function createApp() {
   const db = dbm.get();
@@ -41,16 +41,17 @@ function createApp() {
   const render = (req, res, title, body, status = 200) => {
     const flash = req.session.flash;
     delete req.session.flash;
-    res.status(status).send(layout({ title, body, flash, user: req.session.user }));
+    const sites = req.session.user ? db.prepare('SELECT id, name, enabled, dry_run, last_poll_status FROM sites ORDER BY id').all() : [];
+    res.status(status).send(layout({ title, body, flash, user: req.session.user, sites, activeSiteId: req.site ? req.site.id : null }));
   };
   const flash = (req, type, text) => (req.session.flash = { type, text });
 
   // ---------- লগইন ----------
   const attempts = new Map();
   app.get('/login', (req, res) => {
-    render(req, res, 'লগইন', `<div class="login card"><h2>প্যানেলে লগইন</h2>
-<form method="post" action="/login"><label class="f"><span>ইউজারনেম</span><input type="text" name="user" autofocus></label>
-<label class="f"><span>পাসওয়ার্ড</span><input type="password" name="password"></label><button class="btn">লগইন</button></form></div>`);
+    render(req, res, 'লগইন', `<div class="login card"><h2>প্যানেলে লগইন</h2><p class="sub">চালিয়ে যেতে আপনার ইউজারনেম আর পাসওয়ার্ড দিন</p>
+<form method="post" action="/login"><label class="f"><span>ইউজারনেম</span><input type="text" name="user" autocomplete="username" autofocus></label>
+<label class="f"><span>পাসওয়ার্ড</span><input type="password" name="password" autocomplete="current-password"></label><button class="btn">লগইন ${icon('arrow')}</button></form></div>`);
   });
   app.post('/login', (req, res) => {
     const ip = req.ip;
@@ -119,20 +120,20 @@ function createApp() {
       .map((s) => {
         const st = siteStats(s.id);
         const err = String(s.last_poll_status || '').startsWith('ত্রুটি');
-        return `<div class="card site-card"><h2><a href="/sites/${s.id}">${esc(s.name)}</a>
-${s.enabled ? '<span class="pill green">চালু</span>' : '<span class="pill gray">বন্ধ</span>'}${s.dry_run ? '<span class="pill blue">টেস্ট মোড</span>' : ''}</h2>
-<div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">
-<div><b>${st.missedToday}</b><br><small class="muted">আজ মিসড কল</small></div>
-<div><b>${s.dry_run ? st.dryToday : st.sentToday}</b><br><small class="muted">${s.dry_run ? 'আজ টেস্ট SMS' : 'আজ SMS গেছে'}</small></div>
-<div><b>${st.activeAgents}/${st.totalAgents}</b><br><small class="muted">সক্রিয় এজেন্ট</small></div></div>
-${engine.pollStatus(s.id).running ? '<div class="help" style="color:var(--amber)">এখন কল টানা চলছে…</div>' : ''}
-<div class="help ${err ? '' : 'muted'}" style="${err ? 'color:var(--red)' : ''}">শেষ চেক: ${esc(s.last_poll_at || 'এখনো হয়নি')}${s.last_poll_status ? ' — ' + esc(s.last_poll_status) : ''}</div></div>`;
+        const [state, stateLabel] = siteState(s);
+        const polling = engine.pollStatus(s.id).running;
+        return `<div class="card site-card"><div class="site-top"><div class="avatar sm">${initials(s.name)}</div><div style="min-width:0">
+<h2><a href="/sites/${s.id}">${esc(s.name)}</a></h2><div class="title-pills">${s.enabled ? '<span class="pill green">চালু</span>' : '<span class="pill gray">বন্ধ</span>'}${s.dry_run ? '<span class="pill blue">টেস্ট মোড</span>' : ''}</div></div></div>
+<div class="mini"><div><b>${st.missedToday}</b><small>আজ মিসড কল</small></div>
+<div><b>${s.dry_run ? st.dryToday : st.sentToday}</b><small>${s.dry_run ? 'আজ টেস্ট SMS' : 'আজ SMS গেছে'}</small></div>
+<div><b>${st.activeAgents}/${st.totalAgents}</b><small>সক্রিয় এজেন্ট</small></div></div>
+<div class="site-foot ${err ? 'err' : ''}"><span class="dot ${err ? 'err' : polling ? 'test' : state}" title="${esc(stateLabel)}"></span><span>${polling ? 'এখন কল টানা চলছে… · ' : ''}শেষ চেক: ${esc(s.last_poll_at || 'এখনো হয়নি')}${s.last_poll_status ? ' — ' + esc(s.last_poll_status) : ''}</span></div></div>`;
       })
       .join('');
     render(req, res, 'সব সাইট', `<h1>সব সাইট</h1><p class="sub">প্রতিটা সাইট আলাদা mConnex হটলাইন, আলাদা এজেন্ট আর আলাদা SMS নিয়ে চলে।</p>
-<div class="sites">${cards || '<div class="card muted">এখনো কোনো সাইট নেই। নিচে প্রথম সাইটটা যোগ করুন।</div>'}</div>
-<div class="card" style="max-width:520px"><h2>নতুন সাইট যোগ করুন</h2><form method="post" action="/sites" class="row">
-<input type="text" name="name" placeholder="যেমন: Coastal Manpower" required style="flex:1"><button class="btn">যোগ করুন</button></form></div>`);
+${sites.length ? '' : '<div class="card muted">এখনো কোনো সাইট নেই। নিচে প্রথম সাইটটা যোগ করুন।</div>'}
+<div class="sites">${cards}<div class="card add-card"><h2>${icon('plus')}নতুন সাইট যোগ করুন</h2><p class="help">নাম দিন, তারপর সেটিংসে mConnex আর SMS-এর তথ্য বসাবেন।</p><form method="post" action="/sites" class="row">
+<input type="text" name="name" placeholder="যেমন: Coastal Manpower" required style="flex:1;min-width:160px"><button class="btn">যোগ করুন</button></form></div></div>`);
   });
 
   app.post('/sites', (req, res) => {
@@ -157,26 +158,26 @@ ${engine.pollStatus(s.id).running ? '<div class="help" style="color:var(--amber)
     const body = `${siteTabs(s, '')}
 ${missing.length ? `<div class="warn">বাকি আছে: ${missing.map(esc).join(', ')}</div>` : ''}
 ${s.dry_run && s.enabled ? '<div class="warn">টেস্ট মোড চালু — SMS আসলে যাচ্ছে না, শুধু লগে দেখাচ্ছে কাকে কী যেত। সব ঠিক দেখলে সেটিংস থেকে টেস্ট মোড বন্ধ করুন।</div>' : ''}
-<div class="grid" style="margin-bottom:18px">
-<div class="stat"><b>${st.missedToday}</b><small>আজ মিসড কল</small></div>
-<div class="stat"><b>${st.sentToday}</b><small>আজ SMS গেছে</small></div>
-<div class="stat"><b>${st.dryToday}</b><small>আজ টেস্ট SMS</small></div>
-<div class="stat"><b>${st.queued}</b><small>লাইনে আছে</small></div>
-<div class="stat"><b>${st.failedToday}</b><small>আজ ব্যর্থ</small></div>
-<div class="stat"><b>${st.callers}</b><small>মোট কলার</small></div></div>
-<div class="card"><h2>অবস্থা</h2>${pollingNote(s.id)}<p>শেষ চেক: <b>${esc(s.last_poll_at || 'এখনো হয়নি')}</b><br><span class="muted">${esc(s.last_poll_status || '')}</span>
-${s.enabled && s.next_poll_at ? `<br><span class="muted">পরের চেক: ${esc(s.next_poll_at.slice(11, 16))}-এর পরে${s.next_sweep_at ? ` · পরের নিরাপত্তা চেক: ${esc(s.next_sweep_at.slice(11, 16))}-এর পরে` : ''}</span>` : ''}</p>
-<div class="row"><form method="post" action="/sites/${s.id}/poll"><button class="btn">এখনই কল চেক করুন</button></form>
-<form method="post" action="/sites/${s.id}/test-login"><button class="btn ghost">mConnex লগইন টেস্ট</button></form></div></div>
-<div class="card"><h2>টেস্ট SMS পাঠান</h2><p class="help">SMS কোম্পানি: <b>${esc(sms.providerOf(s).label)}</b>। এটা টেস্ট মোড চালু থাকলেও আসল SMS পাঠায় — নিজের নাম্বার দিয়ে দেখুন লেখাটা কেমন যায়।</p>
-<div class="row"><form method="post" action="/sites/${s.id}/test-sms" class="row"><input type="text" name="number" placeholder="01XXXXXXXXX" style="max-width:220px" required><button class="btn ghost">পাঠান</button></form>
-<form method="post" action="/sites/${s.id}/sms-balance"><button class="btn ghost">SMS ব্যালেন্স দেখুন</button></form></div></div>
-<div class="card"><h2>সাম্প্রতিক SMS</h2>${smsTable(recent)}<p><a href="/sites/${s.id}/sms">সব দেখুন →</a></p></div>`;
+<div class="grid stats">
+${stat('phoneMissed', st.missedToday, 'আজ মিসড কল', 'amber')}
+${stat('send', st.sentToday, 'আজ SMS গেছে', 'green')}
+${stat('flask', st.dryToday, 'আজ টেস্ট SMS', 'blue')}
+${stat('hourglass', st.queued, 'লাইনে আছে', 'violet')}
+${stat('x', st.failedToday, 'আজ ব্যর্থ', 'red')}
+${stat('contact', st.callers, 'মোট কলার', 'teal')}</div>
+<div class="cols"><div class="card"><h2>${icon('activity')}অবস্থা</h2>${pollingNote(s.id)}<div class="status-line">${icon('clock')}<div>শেষ চেক: <b>${esc(s.last_poll_at || 'এখনো হয়নি')}</b><br><span class="muted">${esc(s.last_poll_status || '')}</span>
+${s.enabled && s.next_poll_at ? `<br><span class="muted">পরের চেক: ${esc(s.next_poll_at.slice(11, 16))}-এর পরে${s.next_sweep_at ? ` · পরের নিরাপত্তা চেক: ${esc(s.next_sweep_at.slice(11, 16))}-এর পরে` : ''}</span>` : ''}</div></div>
+<div class="row"><form method="post" action="/sites/${s.id}/poll"><button class="btn">${icon('refresh')}এখনই কল চেক করুন</button></form>
+<form method="post" action="/sites/${s.id}/test-login"><button class="btn ghost">${icon('key')}mConnex লগইন টেস্ট</button></form></div></div>
+<div class="card"><h2>${icon('send')}টেস্ট SMS পাঠান</h2><p class="help">SMS কোম্পানি: <b>${esc(sms.providerOf(s).label)}</b>। এটা টেস্ট মোড চালু থাকলেও আসল SMS পাঠায় — নিজের নাম্বার দিয়ে দেখুন লেখাটা কেমন যায়।</p>
+<form method="post" action="/sites/${s.id}/test-sms" class="row" style="margin-bottom:12px"><input type="text" name="number" placeholder="01XXXXXXXXX" style="flex:1;min-width:150px" required><button class="btn ghost">${icon('send')}পাঠান</button></form>
+<form method="post" action="/sites/${s.id}/sms-balance"><button class="btn ghost">${icon('wallet')}SMS ব্যালেন্স দেখুন</button></form></div></div>
+<div class="card flush"><div class="card-head"><h2>${icon('message')}সাম্প্রতিক SMS</h2><a class="link-more" href="/sites/${s.id}/sms">সব দেখুন ${icon('arrow')}</a></div>${smsTable(recent)}</div>`;
     render(req, res, s.name, body);
   });
 
   function smsTable(rows, { actions = false, siteId } = {}) {
-    if (!rows.length) return '<p class="muted">এখনো কিছু নেই।</p>';
+    if (!rows.length) return '<p class="muted" style="padding:0 20px 18px;margin:0">এখনো কিছু নেই।</p>';
     return `<div class="scroll"><table><tr><th>কলার</th><th>অবস্থা</th><th>এজেন্ট</th><th>মিসড কল</th><th>পাঠানো/সিদ্ধান্ত</th><th>মেসেজ / কারণ</th>${actions ? '<th></th>' : ''}</tr>
 ${rows
   .map(
@@ -258,17 +259,17 @@ ${actions ? `<td>${r.status === 'failed' ? `<form method="post" action="/sites/$
       )
       .all(s.id, `${date} 00:00:00`, `${date} 23:59:59`, `%${q}%`);
     const unique = new Set(rows.map((r) => r.caller)).size;
-    const tab = (k, l) => `<a class="btn small ${view === k ? '' : 'ghost'}" href="/sites/${s.id}/calls?view=${k}&date=${date}${q ? `&q=${q}` : ''}">${l}</a>`;
+    const tab = (k, l) => `<a class="${view === k ? 'on' : ''}" href="/sites/${s.id}/calls?view=${k}&date=${date}${q ? `&q=${q}` : ''}">${l}</a>`;
     render(
       req,
       res,
       'মিসড কল',
       `${siteTabs(s, '/calls')}
 <div class="card"><form class="row" method="get"><input type="hidden" name="view" value="${view}">
-<input type="date" name="date" value="${date}" style="max-width:180px;font:inherit;border:1px solid #cdd2cc;border-radius:7px;padding:6px 10px">
-<input type="search" name="q" value="${esc(q)}" placeholder="নাম্বার দিয়ে খুঁজুন" style="max-width:220px"><button class="btn ghost">দেখুন</button></form>
-<div class="row" style="margin-top:12px">${tab('missed', 'মিসড কল')}${tab('answered', 'রিসিভ হওয়া')}${tab('all', 'সব কল')}</div></div>
-<div class="card"><h2>${esc(date)} — ${rows.length}টি কল, ${unique} জন আলাদা কলার</h2>
+<div class="seg">${tab('missed', 'মিসড কল')}${tab('answered', 'রিসিভ হওয়া')}${tab('all', 'সব কল')}</div>
+<input type="date" name="date" value="${date}" style="max-width:180px">
+<input type="search" name="q" value="${esc(q)}" placeholder="নাম্বার দিয়ে খুঁজুন" style="max-width:220px"><button class="btn ghost">${icon('search')}দেখুন</button></form></div>
+<div class="card"><h2>${icon('phoneMissed')}${esc(date)} — ${rows.length}টি কল, ${unique} জন আলাদা কলার</h2>
 <p class="help">mConnex থেকে বট যতবার কল টেনেছে, সব এখানে জমা হয়। সিস্টেম চালুর আগের পুরনো কলও দেখাবে, তবে সেগুলোতে SMS যায় না।</p>
 <div class="scroll"><table><tr><th>সময়</th><th>কলার</th><th>কোন নাম্বারে</th><th>অবস্থা</th><th>সময় (সেকেন্ড)</th><th>এজেন্ট</th><th>SMS</th></tr>
 ${
@@ -312,12 +313,12 @@ ${
       res,
       'এজেন্ট',
       `${siteTabs(s, '/agents')}
-<div class="card"><h2>এজেন্ট তালিকা</h2><p class="help">রাউন্ড রবিনে নতুন কলাররা ক্রম অনুযায়ী একজন একজন করে এজেন্ট পান। একবার যে কলার যে এজেন্ট পেয়েছেন, পরেও তিনিই পাবেন। কোনো এজেন্ট বন্ধ করলে তার কলাররা পরের মিসড কলে নতুন একজন সক্রিয় এজেন্ট পাবেন।</p>
+<div class="card"><h2>${icon('users')}এজেন্ট তালিকা</h2><p class="help">রাউন্ড রবিনে নতুন কলাররা ক্রম অনুযায়ী একজন একজন করে এজেন্ট পান। একবার যে কলার যে এজেন্ট পেয়েছেন, পরেও তিনিই পাবেন। কোনো এজেন্ট বন্ধ করলে তার কলাররা পরের মিসড কলে নতুন একজন সক্রিয় এজেন্ট পাবেন।</p>
 <div class="scroll"><table><tr><th>#</th><th>নাম · নাম্বার · ক্রম</th><th>অবস্থা</th><th>কলার</th><th>SMS গেছে</th><th></th></tr>${rows || '<tr><td colspan="6" class="muted">কোনো এজেন্ট নেই</td></tr>'}</table></div></div>
-<div class="form-grid"><div class="card"><h2>একজন এজেন্ট যোগ</h2><form method="post" action="/sites/${s.id}/agents">
+<div class="form-grid"><div class="card"><h2>${icon('plus')}একজন এজেন্ট যোগ</h2><form method="post" action="/sites/${s.id}/agents">
 <label class="f"><span>নাম</span><input type="text" name="name" required></label><label class="f"><span>নাম্বার</span><input type="text" name="number" placeholder="01XXXXXXXXX" required></label>
-<button class="btn">যোগ করুন</button></form></div>
-<div class="card"><h2>একসাথে অনেক এজেন্ট যোগ</h2><form method="post" action="/sites/${s.id}/agents/bulk">
+<button class="btn">${icon('plus')}যোগ করুন</button></form></div>
+<div class="card"><h2>${icon('file')}একসাথে অনেক এজেন্ট যোগ</h2><form method="post" action="/sites/${s.id}/agents/bulk">
 <label class="f"><span>প্রতি লাইনে একজন: নাম, নাম্বার</span><textarea name="list" rows="8" placeholder="রহিম, 01711000001&#10;করিম, 01811000002"></textarea>
 <div class="help">Google Sheet বা Excel থেকে দুই কলাম কপি করে পেস্ট করলেও চলবে।</div></label><button class="btn">সব যোগ করুন</button></form></div></div>`
     );
@@ -405,8 +406,8 @@ ${
       res,
       'কলার',
       `${siteTabs(s, '/callers')}
-<div class="card"><form class="row" method="get"><input type="search" name="q" value="${esc(q)}" placeholder="নাম্বার দিয়ে খুঁজুন" style="max-width:260px"><button class="btn ghost">খুঁজুন</button></form></div>
-<div class="card"><h2>কলার ও তাদের এজেন্ট</h2><p class="help">দরকার হলে এখান থেকে কোনো কলারের এজেন্ট হাতে বদলে দিতে পারেন।</p><div class="scroll"><table>
+<div class="card"><form class="row" method="get"><input type="search" name="q" value="${esc(q)}" placeholder="নাম্বার দিয়ে খুঁজুন" style="max-width:260px"><button class="btn ghost">${icon('search')}খুঁজুন</button></form></div>
+<div class="card"><h2>${icon('contact')}কলার ও তাদের এজেন্ট</h2><p class="help">দরকার হলে এখান থেকে কোনো কলারের এজেন্ট হাতে বদলে দিতে পারেন।</p><div class="scroll"><table>
 <tr><th>নাম্বার</th><th>এজেন্ট</th><th>মিসড কল</th><th>শেষ মিসড কল</th><th>SMS গেছে</th><th>শেষ SMS</th></tr>
 ${
   rows
@@ -441,10 +442,10 @@ ${c.agent_id && !c.agent_active ? '<div class="help" style="color:var(--amber)">
       res,
       'SMS লগ',
       `${siteTabs(s, '/sms')}
-<div class="card"><div class="row" style="justify-content:space-between"><div class="row">${f
-        .map(([k, l]) => `<a class="btn small ${status === k ? '' : 'ghost'}" href="/sites/${s.id}/sms${k ? `?status=${k}` : ''}">${l}</a>`)
+<div class="card"><div class="row" style="justify-content:space-between"><div class="seg">${f
+        .map(([k, l]) => `<a class="${status === k ? 'on' : ''}" href="/sites/${s.id}/sms${k ? `?status=${k}` : ''}">${l}</a>`)
         .join('')}</div>
-<form method="post" action="/sites/${s.id}/sms/retry-failed"><button class="btn small ghost">সব ব্যর্থ SMS আবার চেষ্টা</button></form></div></div>
+<form method="post" action="/sites/${s.id}/sms/retry-failed"><button class="btn small ghost">${icon('refresh')}সব ব্যর্থ SMS আবার চেষ্টা</button></form></div></div>
 <div class="card">${smsTable(rows, { actions: true, siteId: s.id })}<p class="help">সর্বশেষ ৩০০টি দেখানো হচ্ছে।</p></div>`
     );
   });
@@ -470,7 +471,7 @@ ${c.agent_id && !c.agent_active ? '<div class="help" style="color:var(--amber)">
       req,
       res,
       'ইভেন্ট',
-      `${siteTabs(req.site, '/events')}<div class="card"><h2>ইভেন্ট ও ত্রুটি</h2><div class="scroll"><table><tr><th>সময়</th><th>ধরন</th><th>বিবরণ</th></tr>
+      `${siteTabs(req.site, '/events')}<div class="card"><h2>${icon('activity')}ইভেন্ট ও ত্রুটি</h2><div class="scroll"><table><tr><th>সময়</th><th>ধরন</th><th>বিবরণ</th></tr>
 ${rows.map((e) => `<tr><td class="nowrap">${esc(e.created_at)}</td><td>${e.level === 'error' ? '<span class="pill red">ত্রুটি</span>' : '<span class="pill gray">তথ্য</span>'}</td><td>${esc(e.message)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">কিছু নেই</td></tr>'}
 </table></div></div>`
     );
@@ -480,19 +481,19 @@ ${rows.map((e) => `<tr><td class="nowrap">${esc(e.created_at)}</td><td>${e.level
   app.get('/sites/:id/settings', loadSite, (req, res) => {
     const s = req.site;
     const groups = [
-      ['সাধারণ', ['name', 'enabled', 'dry_run']],
-      ['mConnex', ['mconnex_login', 'mconnex_password', 'hotlines']],
-      ['কল চেক', ['poll_min_minutes', 'poll_max_minutes', 'overlap_min_minutes', 'overlap_max_minutes', 'sweep_minutes', 'lookback_minutes', 'page_limit', 'request_timeout_minutes']],
-      ['SMS-এর নিয়ম', ['max_missed_age_minutes', 'sms_delay_minutes', 'skip_if_answered', 'cooldown_days', 'quiet_start', 'quiet_end', 'mobile_only', 'max_sms_per_run']],
-      ['SMS কোম্পানি', ['sms_provider', 'sms_sender_id', 'sms_client_id', 'sms_client_secret', 'sms_api_key', 'sms_api_url']],
-      ['SMS-এর লেখা', ['sms_template']],
+      ['সাধারণ', ['name', 'enabled', 'dry_run'], 'power'],
+      ['mConnex', ['mconnex_login', 'mconnex_password', 'hotlines'], 'plug'],
+      ['কল চেক', ['poll_min_minutes', 'poll_max_minutes', 'overlap_min_minutes', 'overlap_max_minutes', 'sweep_minutes', 'lookback_minutes', 'page_limit', 'request_timeout_minutes'], 'refresh'],
+      ['SMS-এর নিয়ম', ['max_missed_age_minutes', 'sms_delay_minutes', 'skip_if_answered', 'cooldown_days', 'quiet_start', 'quiet_end', 'mobile_only', 'max_sms_per_run'], 'shield'],
+      ['SMS কোম্পানি', ['sms_provider', 'sms_sender_id', 'sms_client_id', 'sms_client_secret', 'sms_api_key', 'sms_api_url'], 'building'],
+      ['SMS-এর লেখা', ['sms_template'], 'file'],
     ];
     const byKey = Object.fromEntries(dbm.SITE_SETTINGS.map((x) => [x.key, x]));
     const body = `${siteTabs(s, '/settings')}<form method="post" action="/sites/${s.id}/settings">
-${groups.map(([title, keys]) => `<div class="card"><h2>${title}</h2><div class="form-grid">${keys.map((k) => settingField(byKey[k], s[k])).join('')}</div></div>`).join('')}
-<button class="btn">সেটিংস সেভ করুন</button></form>
-<div class="card" style="margin-top:30px;border-color:var(--red-bg)"><h2>সাইট মুছে ফেলা</h2><p class="help">এই সাইটের সব এজেন্ট, কলার আর SMS লগ মুছে যাবে, ফেরত আনা যাবে না।</p>
-<form method="post" action="/sites/${s.id}/delete" onsubmit="return confirm('সত্যিই ${esc(s.name)} মুছে ফেলবেন? সব ডেটা চলে যাবে।')"><button class="btn danger">সাইট মুছুন</button></form></div>`;
+${groups.map(([title, keys, ic]) => `<div class="card setting-card"><h2><span class="ic-box">${icon(ic)}</span>${title}</h2><div class="form-grid">${keys.map((k) => settingField(byKey[k], s[k])).join('')}</div></div>`).join('')}
+<div class="save-bar"><button class="btn">${icon('check')}সেটিংস সেভ করুন</button></div></form>
+<div class="card danger-zone"><h2>${icon('trash')}সাইট মুছে ফেলা</h2><p class="help">এই সাইটের সব এজেন্ট, কলার আর SMS লগ মুছে যাবে, ফেরত আনা যাবে না।</p>
+<form method="post" action="/sites/${s.id}/delete" onsubmit="return confirm('সত্যিই ${esc(s.name)} মুছে ফেলবেন? সব ডেটা চলে যাবে।')"><button class="btn danger">${icon('trash')}সাইট মুছুন</button></form></div>`;
     render(req, res, 'সেটিংস', body);
   });
 
