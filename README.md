@@ -27,8 +27,8 @@ Banglalink mConnex প্যানেলের হটলাইনে মিস�
 VPS-এ SSH দিয়ে ঢুকে একটার পর একটা কমান্ড চালান:
 
 ```bash
-# ১. Node.js 20, git আর বিল্ড টুল
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# ১. Node.js 22, git আর বিল্ড টুল
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs git build-essential
 sudo npm install -g pm2
 

@@ -21,7 +21,7 @@ const sms = require('../src/sms');
   if (site.sms_provider !== 'bulksmsbd') {
     console.log(`Client ID: "${site.sms_client_id}"`);
     console.log(`Client Secret: ${site.sms_client_secret ? `${site.sms_client_secret.length} অক্ষর, শেষ ৪টি …${site.sms_client_secret.slice(-4)}` : 'দেওয়া নেই'}`);
-    console.log(`API ঠিকানা: ${(process.env.SOFTCENTS_API_URL || 'https://sms.softcents.com/api/v1').replace(/\/+$/, '')}/send-sms`);
+    console.log(`API ঠিকানা: ${p.baseUrl(site)}/send-sms`);
   }
   console.log(`পাঠানো হচ্ছে: 88${number}\n`);
 

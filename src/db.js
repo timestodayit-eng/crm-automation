@@ -45,6 +45,13 @@ const SITE_SETTINGS = [
   { key: 'sms_client_id', label: 'Softcents Client ID', type: 'text', def: '' },
   { key: 'sms_client_secret', label: 'Softcents Client Secret', type: 'secret', def: '' },
   { key: 'sms_api_key', label: 'BulkSMSBD API Key', type: 'secret', def: '' },
+  {
+    key: 'sms_api_url',
+    label: 'SMS API ঠিকানা (URL)',
+    type: 'url',
+    def: '',
+    help: 'খালি রাখলে বেছে নেওয়া কোম্পানির সাধারণ ঠিকানাই চলবে (সাধারণত খালিই রাখুন)। কোম্পানি নতুন ঠিকানা দিলে এখানে বসান — Softcents হলে https://sms.softcents.com/api/v1 এর মতো, BulkSMSBD হলে https://bulksmsbd.net/api/smsapi এর মতো। SMS কোম্পানি বদলালে এই ঘরটা খালি করে দিন',
+  },
   { key: 'sms_sender_id', label: 'Sender ID', type: 'text', def: '', help: 'SMS কোন নামে বা নাম্বারে যাবে — কোম্পানির প্যানেলে অনুমোদিত Sender ID দিন' },
 ];
 
