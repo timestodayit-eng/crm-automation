@@ -126,7 +126,7 @@ async function fetchPage(site, params) {
 
 // নির্দিষ্ট সময়ের মধ্যের সব কল (সব পেজ মিলিয়ে)
 async function fetchCalls(site, startDate, endDate) {
-  const limit = Math.max(10, Number(site.page_limit) || 100);
+  const limit = Math.min(500, Math.max(10, Number(site.page_limit) || 100));
   const all = [];
   let total = Infinity;
   for (let page = 1; page <= 50 && all.length < total; page++) {

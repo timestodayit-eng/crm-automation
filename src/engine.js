@@ -146,7 +146,8 @@ async function pollSite(siteId) {
   const endDate = time.now();
   // সাধারণত শেষ "পিছনে দেখার সময়" টুকু; কিন্তু mConnex কিছুক্ষণ বন্ধ থাকলে শেষ সফল চেকের সময় থেকে
   // (সর্বোচ্চ ১২ ঘণ্টা পিছনে) টানে, যাতে বন্ধ থাকার সময়ের কোনো কল বাদ না পড়ে
-  let startDate = time.minutesAgo(Number(site.lookback_minutes) || 60);
+  // অন্তত ৩০ মিনিট — mConnex-এ কল দেরিতে ওঠে, ছোট সময় দিলে কল বাদ পড়ে
+  let startDate = time.minutesAgo(Math.max(30, Number(site.lookback_minutes) || 60));
   if (site.last_ok_end) {
     const catchUp = time.addMinutes(site.last_ok_end, -10);
     if (catchUp < startDate) startDate = catchUp > time.minutesAgo(12 * 60) ? catchUp : time.minutesAgo(12 * 60);
